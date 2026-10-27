@@ -1,0 +1,27 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExamHelper", "ExamHelper\ExamHelper.csproj", "{B7C66F5F-776C-49AF-AA84-EB739647A8C7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExamHelper.Tests", "ExamHelper.Tests\ExamHelper.Tests.csproj", "{D54F7B54-CA5F-41A6-8FAC-04473049E502}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B7C66F5F-776C-49AF-AA84-EB739647A8C7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B7C66F5F-776C-49AF-AA84-EB739647A8C7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B7C66F5F-776C-49AF-AA84-EB739647A8C7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B7C66F5F-776C-49AF-AA84-EB739647A8C7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D54F7B54-CA5F-41A6-8FAC-04473049E502}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D54F7B54-CA5F-41A6-8FAC-04473049E502}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D54F7B54-CA5F-41A6-8FAC-04473049E502}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D54F7B54-CA5F-41A6-8FAC-04473049E502}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
