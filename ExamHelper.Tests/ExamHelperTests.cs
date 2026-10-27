@@ -751,5 +751,56 @@ namespace ExamHelper.Tests
         }
 
         #endregion
+
+        #region 8. Kiểm thử ReportHelper (Xuất Báo Cáo HTML & Gom nhóm)
+
+        [Fact]
+        public void ReportHelper_GenerateHtml_WithGroupingAndSums_GeneratesExpectedStructure()
+        {
+            var dt = new DataTable();
+            dt.Columns.Add("MaNV", typeof(string));
+            dt.Columns.Add("HoTen", typeof(string));
+            dt.Columns.Add("TenPB", typeof(string));
+            dt.Columns.Add("Luong", typeof(decimal));
+
+            dt.Rows.Add("NV01", "Nguyễn Văn A", "Kế toán", 10000000m);
+            dt.Rows.Add("NV02", "Trần Thị B", "Kế toán", 15000000m);
+            dt.Rows.Add("NV03", "Lê Văn C", "Kỹ thuật", 20000000m);
+
+            var columns = new[]
+            {
+                new ReportColumn("MaNV", "Mã NV", HorizontalAlignment.Center),
+                new ReportColumn("HoTen", "Họ và tên"),
+                new ReportColumn("Luong", "Mức lương", "N0", HorizontalAlignment.Right, isSum: true)
+            };
+
+            string html = ReportHelper.GenerateHtml(dt, "BẢNG LƯƠNG NHÂN VIÊN", "Phòng ban: Tất cả", 
+                groupByColumn: "TenPB", groupPrefix: "Phòng: ", columns: columns);
+
+            Assert.Contains("BẢNG LƯƠNG NHÂN VIÊN", html);
+            Assert.Contains("Phòng: Kế toán (2 bản ghi)", html);
+            Assert.Contains("Phòng: Kỹ thuật (1 bản ghi)", html);
+            Assert.Contains("Nguyễn Văn A", html);
+            Assert.Contains("TỔNG CỘNG", html);
+            Assert.Contains("45,000,000", html); // 10tr + 15tr + 20tr = 45tr
+        }
+
+        [Fact]
+        public void ReportHelper_GenerateHtml_AutoDetectColumns_WorksCorrectly()
+        {
+            var dt = new DataTable();
+            dt.Columns.Add("MaSP", typeof(string));
+            dt.Columns.Add("Gia", typeof(decimal));
+
+            dt.Rows.Add("SP01", 500000m);
+
+            string html = ReportHelper.GenerateHtml(dt, "DANH SÁCH SẢN PHẨM");
+            Assert.Contains("DANH SÁCH SẢN PHẨM", html);
+            Assert.Contains("SP01", html);
+            Assert.Contains("500,000", html);
+        }
+
+        #endregion
     }
 }
+

@@ -32,6 +32,7 @@ Mỗi module đều có file hướng dẫn riêng biệt kèm giải thích chi
 | [⚡ Cheat Sheet tra cứu nhanh](Docs/EXAM_CHEATSHEET.md) | Tổng hợp các đoạn code ngắn dùng ngay trong phòng thi |
 | [⚠️ 7 Lỗi thường gặp & Cách khắc phục](Docs/COMMON_ERRORS.md) | Xử lý lỗi kết nối, trùng mã khi sửa, tính sai tuổi, nạp chồng cột... |
 | [🎯 3 Đề thi mẫu luyện tập](Docs/PRACTICE_EXAMS.md) | 3 bộ đề luyện tập (Phòng khám, Điện máy, Khách sạn) kèm full script SQL Server |
+| [📋 Hướng dẫn chi tiết Bài 1 (Phòng khám)](Docs/HUONG_DAN_CHI_TIET_BAI_1.md) | Giải chi tiết từng ý từ Form 1 (CRUD), Form 2 (Thống kê) đến Form Báo cáo xuất Excel |
 
 ---
 
