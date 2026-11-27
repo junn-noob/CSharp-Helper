@@ -2,6 +2,12 @@
 
 Tài liệu ghi nhận các thay đổi chính của package **ExamHelper** (`PackageId: ExamHelper`).
 
+## [1.2.1] - 2026-11-28
+### Fixed & Improved
+- Bổ sung `SafeSplitContainer` trong `FormReportViewer` xử lý ngoại lệ GDI+ `SplitContainer.RepaintSplitterRect()` khi chạy trên môi trường thiếu interactive DC.
+- `ReportHelper.ShowReport(DataGridView, ..., groupByColumn)` tự động chuyển cột dùng để gom nhóm sang `HiddenColumns` (vẫn giữ nguyên tiêu đề tiếng Việt nếu người dùng bỏ nhóm).
+- Cập nhật `Samples/De01_QLNhanSu/frmThongKe.cs` bỏ khai báo cứng `ReportColumn[]`, tự lấy cột từ `dgvKetQua` và tự động nạp `MauBangLuong.examrpt` nếu có.
+
 ## [1.2.0] - 2026-11-28
 ### Added
 - `ReportTemplate` & `ReportTemplateColumn` (`.examrpt` XML): lưu toàn bộ bố cục báo cáo (tiêu đề, đơn vị, nhóm, thứ tự cột hiện/ẩn, căn lề, định dạng, `ReportSummaryMode`, khổ A4, cỡ chữ) ra file và nạp lại qua `ReportHelper.LoadTemplate` / `ShowReportFromTemplate`.

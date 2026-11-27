@@ -796,9 +796,53 @@ namespace ExamHelper.Utilities
             if (grid == null)
                 throw new ArgumentNullException(nameof(grid), "DataGridView không được null.");
 
-            DataTable dt = ExtractTable(grid, out List<ReportColumn> cols);
-            ShowReport(dt, reportTitle, filterCondition, groupByColumn, groupPrefix, cols,
-                companyName, owner, signerTitle, showGroupTotals, pageFooter, openDesigner, landscape, fontSizePt);
+            DataTable dt = ExtractTable(grid, out ReportDesignOptions options, reportTitle, filterCondition,
+                groupByColumn, groupPrefix, companyName, signerTitle, showGroupTotals, pageFooter,
+                openDesigner, landscape, fontSizePt);
+            ShowReport(dt, options, owner);
+        }
+
+        internal static DataTable ExtractTable(DataGridView grid, out ReportDesignOptions options,
+            string reportTitle = "BÁO CÁO THỐNG KÊ", string filterCondition = null,
+            string groupByColumn = null, string groupPrefix = null, string companyName = "ĐƠN VỊ QUẢN LÝ",
+            string signerTitle = "Người lập biểu", bool showGroupTotals = false, string pageFooter = "Trang 1/1",
+            bool openDesigner = true, bool landscape = false, int fontSizePt = 13)
+        {
+            DataTable dt = ExtractTable(grid, out List<ReportColumn> extractedCols);
+            List<ReportColumn> visibleCols = extractedCols;
+            List<ReportColumn> hiddenCols = null;
+
+            string normalizedGroup = string.IsNullOrWhiteSpace(groupByColumn) ? null : groupByColumn.Trim();
+            if (!string.IsNullOrEmpty(normalizedGroup) && extractedCols != null)
+            {
+                visibleCols = new List<ReportColumn>();
+                hiddenCols = new List<ReportColumn>();
+                foreach (var c in extractedCols)
+                {
+                    if (string.Equals(c.ColumnName, normalizedGroup, StringComparison.OrdinalIgnoreCase))
+                        hiddenCols.Add(c);
+                    else
+                        visibleCols.Add(c);
+                }
+            }
+
+            options = new ReportDesignOptions
+            {
+                ReportTitle = reportTitle,
+                FilterCondition = filterCondition,
+                GroupByColumn = normalizedGroup,
+                GroupPrefix = groupPrefix,
+                Columns = visibleCols,
+                HiddenColumns = hiddenCols,
+                CompanyName = companyName,
+                SignerTitle = signerTitle,
+                ShowGroupTotals = showGroupTotals,
+                PageFooter = pageFooter,
+                OpenDesigner = openDesigner,
+                Landscape = landscape,
+                FontSizePt = fontSizePt
+            };
+            return dt;
         }
 
         /// <summary>

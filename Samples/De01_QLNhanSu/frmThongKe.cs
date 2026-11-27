@@ -1,5 +1,6 @@
 using System;
 using System.Data;
+using System.IO;
 using System.Windows.Forms;
 using ExamHelper.Binding;
 using ExamHelper.Database;
@@ -49,18 +50,31 @@ namespace De01_QLNhanSu
             if (!isInitial && count == 0) MessageHelper.Info("Không tìm thấy dữ liệu phù hợp");
         }
 
+        private static readonly string ReportTemplatePath = Path.Combine(Application.StartupPath, "MauBangLuong.examrpt");
+
         private void btnXuatBaoCao_Click(object sender, EventArgs e)
         {
             if (_dtKetQua == null || _dtKetQua.Rows.Count == 0) { MessageHelper.Warning("Không có dữ liệu để xuất báo cáo"); return; }
-            ReportHelper.ShowReport(_dtKetQua, "BẢNG LƯƠNG NHÂN VIÊN",
-                $"Phòng ban: {cboPhongBan.Text}; Giới tính: {cboGioiTinh.Text}", "TenPB", "Phòng ban: ",
-                new[] {
-                    new ReportColumn("MaNV", "Mã NV", HorizontalAlignment.Center),
-                    new ReportColumn("HoTen", "Họ tên"),
-                    new ReportColumn("NgaySinh", "Ngày sinh", "dd/MM/yyyy", HorizontalAlignment.Center),
-                    new ReportColumn("HeSoLuong", "Hệ số lương", "0.##", HorizontalAlignment.Right),
-                    new ReportColumn("Luong", "Lương", "N0", HorizontalAlignment.Right, isSum: true)
-                }, "CÔNG TY TNHH AN PHÁT", this);
+
+            string dieuKien = $"Phòng ban: {cboPhongBan.Text}; Giới tính: {cboGioiTinh.Text}";
+
+            // Nếu người dùng đã lưu file mẫu thiết kế riêng thì nạp đúng mẫu đó với dữ liệu lọc hiện tại
+            if (File.Exists(ReportTemplatePath))
+            {
+                ReportHelper.ShowReportFromTemplate(dgvKetQua, ReportTemplatePath,
+                    overrideFilterCondition: dieuKien, owner: this, openDesigner: true);
+                return;
+            }
+
+            // Không khai báo cứng cấu trúc cột: tự gom toàn bộ cột từ dgvKetQua (giữ nguyên tiêu đề tiếng Việt & định dạng)
+            ReportHelper.ShowReport(
+                grid: dgvKetQua,
+                reportTitle: "BẢNG LƯƠNG NHÂN VIÊN",
+                filterCondition: dieuKien,
+                groupByColumn: "TenPB",
+                groupPrefix: "Phòng ban: ",
+                companyName: "CÔNG TY TNHH AN PHÁT",
+                owner: this);
         }
     }
 }

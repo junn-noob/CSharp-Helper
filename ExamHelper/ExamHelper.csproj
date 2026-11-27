@@ -9,7 +9,7 @@
     
     <!-- Thông tin NuGet / GitHub Package -->
     <PackageId>ExamHelper</PackageId>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <Authors>ExamHelper Community</Authors>
     <Company>ExamHelper</Company>
     <Product>ExamHelper Pro</Product>
@@ -20,7 +20,7 @@
     <RepositoryUrl>https://github.com/junn-noob/CSharp-Helper.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>v1.2.0: Giao diện thiết kế báo cáo 2 tab gọn gàng, bấm sửa trực tiếp tiêu đề/cột ngay trên bản xem trước HTML, lưu &amp; mở file mẫu (.examrpt) qua ShowReportFromTemplate và xuất trực tiếp file .rdlc chuẩn Microsoft Report.</PackageReleaseNotes>
+    <PackageReleaseNotes>v1.2.1: Khắc phục lỗi GDI+ SplitContainer.RepaintSplitterRect trên WinForms khi chạy qua ShowDialog/non-interactive DC, tự ẩn cột gom nhóm khi trích xuất báo cáo từ DataGridView và áp dụng trực tiếp vào bài mẫu De01_QLNhanSu.</PackageReleaseNotes>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

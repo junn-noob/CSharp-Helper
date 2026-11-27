@@ -62,6 +62,22 @@ namespace ExamHelper.Utilities
     /// </summary>
     public class FormReportViewer : Form
     {
+        private sealed class SafeSplitContainer : SplitContainer
+        {
+            protected override void OnLayout(LayoutEventArgs e)
+            {
+                try
+                {
+                    base.OnLayout(e);
+                }
+                catch (ExternalException)
+                {
+                    // Bỏ qua lỗi GDI+ từ RepaintSplitterRect() khi chạy trong môi trường không có interactive DC;
+                    // bố cục Panel1/Panel2 đã được tính trước bước RepaintSplitterRect().
+                }
+            }
+        }
+
         private sealed class ColumnDragPayload
         {
             public ReportColumn Column { get; }
@@ -1038,7 +1054,7 @@ namespace ExamHelper.Utilities
             });
 
             // 2. Vùng chính: Panel thiết kế 2 tab gọn gàng bên trái + Xem trước tương tác bên phải
-            _splitMain = new SplitContainer
+            _splitMain = new SafeSplitContainer
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Vertical,

@@ -2005,6 +2005,34 @@ namespace ExamHelper.Tests
             Assert.DoesNotContain("notifyHost", currentHtmlSnapshot);
         }
 
+        [Fact]
+        public void ReportHelper_ExtractTable_WithGroupByColumn_HidesGroupedColumnAndPreservesHeader()
+        {
+            var dt = CreateSampleDataTable();
+            dt.Columns.Add("TenPB", typeof(string));
+            foreach (DataRow r in dt.Rows) r["TenPB"] = "Kinh doanh";
+
+            using (var dgv = new DataGridView())
+            {
+                GridHelper.Bind(dgv, dt,
+                    new GridHelper.GridColumn("MaNV", "Mã NV", 90),
+                    new GridHelper.GridColumn("HoTen", "Họ tên", 150),
+                    new GridHelper.GridColumn("TenPB", "Phòng ban", 120),
+                    new GridHelper.GridColumn("Luong", "Lương", 110, "N0", DataGridViewContentAlignment.MiddleRight));
+
+                DataTable extracted = ReportHelper.ExtractTable(
+                    dgv, out ReportDesignOptions opts, "BÁO CÁO", null, "TenPB", "Phòng ban: ");
+
+                using (var viewer = new FormReportViewer(extracted, opts))
+                {
+                    Assert.DoesNotContain(viewer.VisibleColumns, c => c.ColumnName == "TenPB");
+                    var hiddenGroup = viewer.HiddenColumns.FirstOrDefault(c => c.ColumnName == "TenPB");
+                    Assert.NotNull(hiddenGroup);
+                    Assert.Equal("Phòng ban", hiddenGroup.HeaderText);
+                }
+            }
+        }
+
         #endregion
     }
 
