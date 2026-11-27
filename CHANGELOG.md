@@ -2,6 +2,14 @@
 
 Tài liệu ghi nhận các thay đổi chính của package **ExamHelper** (`PackageId: ExamHelper`).
 
+## [1.3.0] - 2026-11-28
+### Added
+- `CrudBinder` (`ExamHelper.Utilities`): điều phối toàn bộ Form 1 CRUD (`WithCombo`, `WithQuery`/`WithTable`, `WithDefaultRadios`, `WithExtraValidation`, `WithBeforeSave`, `WithAfterSaved`, `BindButtons`, `Start`) giúp rút gọn form quản lý chính (như `De01_QLNhanSu/frmQuanLyNhanVien.cs`) xuống 1 khối cấu hình.
+- `Validator.Check`, `Validator.CheckSchema`, và `FromSchema(container, schema, gridForLabels, extraRules)`: kiểm tra 1 dòng tự bật cảnh báo + focus ô lỗi, đồng thời lấy nhãn tiếng Việt từ tiêu đề cột `DataGridView`.
+- `FilterBuilder.MapIndex(cbo, col, ...)`, `DateBetween(col, fromDate, toDate)`, `DateBetween(col, fromPicker, toPicker)`, `Contains(col, control)`, `ContainsAny(cols, control)`.
+- `FormMapper.AutoClear(container, params RadioButton[] defaultCheckedRadios)` và `FormGenericManager` hỗ trợ `lookupQueries` biến cột khóa ngoại thành `ComboBox`.
+- `GridHelper.SelectRowByValue` hỗ trợ tìm chọn theo cả cột khóa ẩn trong `DataRowView`.
+
 ## [1.2.1] - 2026-11-28
 ### Fixed & Improved
 - Bổ sung `SafeSplitContainer` trong `FormReportViewer` xử lý ngoại lệ GDI+ `SplitContainer.RepaintSplitterRect()` khi chạy trên môi trường thiếu interactive DC.

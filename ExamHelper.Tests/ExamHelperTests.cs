@@ -2033,6 +2033,175 @@ namespace ExamHelper.Tests
             }
         }
 
+        [Fact]
+        public void FilterBuilder_Shortcuts_MapIndex_DateBetween_ContainsControl_WorkCorrectly()
+        {
+            using (var txtKw = new TextBox { Text = "An" })
+            using (var cboGioiTinh = new ComboBox())
+            using (var dtpFrom = new DateTimePicker { Value = new DateTime(2024, 1, 1), ShowCheckBox = true, Checked = true })
+            using (var dtpTo = new DateTimePicker { Value = new DateTime(2024, 12, 31), ShowCheckBox = true, Checked = false })
+            {
+                ComboBoxHelper.BindItems(cboGioiTinh, "Tất cả", "Nam", "Nữ");
+
+                // Index 0 ("Tất cả") phải tự bỏ qua
+                var (w0, _) = FilterBuilder.New().MapIndex(cboGioiTinh, "GioiTinh", 1, 0).Build();
+                Assert.Equal(string.Empty, w0);
+
+                cboGioiTinh.SelectedIndex = 2; // Nữ -> 0
+                var (where, parms) = FilterBuilder.New(DbDialect.SqlServer)
+                    .ContainsAny(new[] { "MaNV", "HoTen" }, txtKw)
+                    .MapIndex(cboGioiTinh, "GioiTinh", 1, 0)
+                    .DateBetween("NgayVaoLam", dtpFrom, dtpTo)
+                    .Build();
+
+                Assert.Contains("([MaNV] LIKE @f0 OR [HoTen] LIKE @f0)", where);
+                Assert.Contains("[GioiTinh] = @f1", where);
+                Assert.Contains("[NgayVaoLam] >= @f2", where); // dtpTo unchecked -> chỉ >= from
+                Assert.Equal("%An%", parms[0].Value);
+                Assert.Equal(0, parms[1].Value);
+                Assert.Equal(new DateTime(2024, 1, 1), parms[2].Value);
+            }
+        }
+
+        [Fact]
+        public void Validator_Check_And_CheckSchema_WithGridLabels_UsesVietnameseHeaders()
+        {
+            MessageHelper.SuppressDialogs = true;
+            try
+            {
+                var schema = new DataTable("NhanVien");
+                var cHoTen = new DataColumn("HoTen", typeof(string)) { AllowDBNull = false, MaxLength = 50 };
+                schema.Columns.Add(cHoTen);
+
+                using (var grp = new GroupBox())
+                using (var txtHoTen = new TextBox { Name = "txtHoTen", Text = "" })
+                using (var dgv = new DataGridView())
+                {
+                    grp.Controls.Add(txtHoTen);
+                    GridHelper.Bind(dgv, schema, new GridHelper.GridColumn("HoTen", "Họ và tên", 150));
+
+                    bool ok = Validator.CheckSchema(grp, schema, dgv);
+                    Assert.False(ok);
+                    Assert.Contains("Họ và tên", MessageHelper.LastMessage);
+
+                    txtHoTen.Text = "Nguyễn An";
+                    Assert.True(Validator.CheckSchema(grp, schema, dgv));
+                    Assert.False(Validator.Check(Validator.MinLength(txtHoTen, "Họ và tên", 30)));
+                }
+            }
+            finally
+            {
+                MessageHelper.SuppressDialogs = false;
+            }
+        }
+
+        [Fact]
+        public void FormMapper_AutoClear_WithDefaultRadios_ChecksDefaults()
+        {
+            using (var grp = new GroupBox())
+            using (var txtMa = new TextBox { Name = "txtMaNV", Text = "NV01" })
+            using (var rdoNam = new RadioButton { Name = "rdoNam", Tag = "GioiTinh:1", Checked = false })
+            using (var rdoNu = new RadioButton { Name = "rdoNu", Tag = "GioiTinh:0", Checked = true })
+            {
+                grp.Controls.AddRange(new Control[] { txtMa, rdoNam, rdoNu });
+                FormMapper.AutoClear(grp, rdoNam);
+
+                Assert.Equal("", txtMa.Text);
+                Assert.True(rdoNam.Checked);
+                Assert.False(rdoNu.Checked);
+            }
+        }
+
+        [Fact]
+        public void CrudBinder_And_FormGenericManager_WithMockDb_RunFullLifecycle()
+        {
+            string prevConn = DbHelper.ConnectionString;
+            MessageHelper.SuppressDialogs = true;
+            MessageHelper.AutoConfirmResult = true;
+            try
+            {
+                var dtPB = new DataTable("PhongBan");
+                dtPB.Columns.Add("MaPB", typeof(string));
+                dtPB.Columns.Add("TenPB", typeof(string));
+                dtPB.Rows.Add("PB01", "Kinh doanh");
+                dtPB.Rows.Add("PB02", "Kế toán");
+
+                var dtNV = new DataTable("NhanVien");
+                dtNV.Columns.Add("MaNV", typeof(string)).AllowDBNull = false;
+                dtNV.Columns.Add("HoTen", typeof(string)).AllowDBNull = false;
+                dtNV.Columns.Add("GioiTinh", typeof(bool)).AllowDBNull = false;
+                dtNV.Columns.Add("MaPB", typeof(string)).AllowDBNull = false;
+                dtNV.PrimaryKey = new[] { dtNV.Columns["MaNV"] };
+                dtNV.Rows.Add("NV01", "Nguyễn An", true, "PB01");
+
+                var mockFactory = new MockDbProviderFactory(new Dictionary<string, DataTable>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "PhongBan", dtPB },
+                    { "NhanVien", dtNV }
+                });
+                DbHelper.SetDefaultConnectionString("Data Source=exam_crud.db", mockFactory, DbDialect.Sqlite);
+
+                // 1. FormGenericManager có lookupQueries tự dựng ComboBox cho MaPB
+                var lookups = new Dictionary<string, string> { { "MaPB", "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB" } };
+                using (var mgr = new FormGenericManager("NhanVien", "default", lookups))
+                {
+                    var ctrlPb = mgr.FindFieldControl("MaPB");
+                    Assert.IsType<ComboBox>(ctrlPb);
+                    Assert.Equal("MaPB", ((ComboBox)ctrlPb).ValueMember);
+                }
+
+                // 2. CrudBinder nạp ComboBox, schema, Grid, khóa key khi chọn, mở khóa khi Reset, và Thêm/Sửa/Xóa
+                using (var frm = new Form())
+                using (var txtMa = new TextBox { Name = "txtMaNV" })
+                using (var txtTen = new TextBox { Name = "txtHoTen" })
+                using (var rdoNam = new RadioButton { Name = "rdoNam", Tag = "GioiTinh:1" })
+                using (var rdoNu = new RadioButton { Name = "rdoNu", Tag = "GioiTinh:0" })
+                using (var cboPB = new ComboBox { Name = "cboPhongBan", DropDownStyle = ComboBoxStyle.DropDownList })
+                using (var dgv = new DataGridView())
+                using (var btnAdd = new Button())
+                using (var btnUpd = new Button())
+                using (var btnDel = new Button())
+                using (var btnReset = new Button())
+                {
+                    frm.Controls.AddRange(new Control[] { txtMa, txtTen, rdoNam, rdoNu, cboPB, dgv, btnAdd, btnUpd, btnDel, btnReset });
+
+                    var binder = CrudBinder.For(frm, "NhanVien", "MaNV", txtMa, dgv, "nhân viên")
+                        .WithCombo(cboPB, "SELECT MaPB, TenPB FROM PhongBan")
+                        .WithQuery("SELECT * FROM NhanVien",
+                            new GridHelper.GridColumn("MaNV", "Mã NV", 80),
+                            new GridHelper.GridColumn("HoTen", "Họ và tên", 140),
+                            new GridHelper.GridColumn("MaPB", "Phòng ban", 90))
+                        .WithDefaultRadios(rdoNam)
+                        .BindButtons(btnAdd, btnUpd, btnDel, btnReset)
+                        .Start();
+
+                    Assert.NotNull(binder.Schema);
+                    Assert.Equal("NV01", txtMa.Text);
+                    Assert.True(txtMa.ReadOnly); // Khóa khi đang chọn dòng NV01
+
+                    binder.ResetForm();
+                    Assert.False(txtMa.ReadOnly);
+                    Assert.Equal("", txtMa.Text);
+                    Assert.True(rdoNam.Checked); // Tự tick lại radio mặc định
+
+                    // Kiểm tra SelectRowByValue tìm được dòng theo giá trị cột ẩn khi cần + Update/Delete qua CrudBinder
+                    Assert.True(GridHelper.SelectRowByValue(dgv, "GioiTinh", true));
+                    txtTen.Text = "Nguyễn An Cập Nhật";
+                    Assert.True(binder.Update());
+                    Assert.Contains("cập nhật", MessageHelper.LastMessage);
+                    Assert.True(binder.Delete());
+                    Assert.Contains("xóa", MessageHelper.LastMessage);
+                }
+            }
+            finally
+            {
+                MessageHelper.SuppressDialogs = false;
+                MessageHelper.AutoConfirmResult = false;
+                if (!string.IsNullOrEmpty(prevConn)) DbHelper.ConnectionString = prevConn;
+                DbHelper.LastError = null;
+            }
+        }
+
         #endregion
     }
 

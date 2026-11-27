@@ -421,14 +421,21 @@ namespace ExamHelper.Binding
                 return false;
 
             string colKey = FindGridColumnKey(grid, columnName);
-            if (colKey == null)
-                return false;
-
             string target = value.ToString().Trim();
             foreach (DataGridViewRow row in grid.Rows)
             {
                 if (row.IsNewRow) continue;
-                string cellVal = row.Cells[colKey].Value?.ToString()?.Trim();
+                object rawVal = null;
+                if (colKey != null)
+                {
+                    rawVal = row.Cells[colKey].Value;
+                }
+                else if (row.DataBoundItem is DataRowView drv && drv.Row.Table.Columns.Contains(columnName))
+                {
+                    rawVal = drv.Row[columnName];
+                }
+
+                string cellVal = rawVal?.ToString()?.Trim();
                 if (string.Equals(cellVal, target, StringComparison.OrdinalIgnoreCase))
                 {
                     // Đặt CurrentCell TRƯỚC row.Selected để CurrentRow cập nhật đúng trước khi SelectionChanged kích hoạt

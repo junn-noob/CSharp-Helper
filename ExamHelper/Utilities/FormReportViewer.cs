@@ -62,22 +62,6 @@ namespace ExamHelper.Utilities
     /// </summary>
     public class FormReportViewer : Form
     {
-        private sealed class SafeSplitContainer : SplitContainer
-        {
-            protected override void OnLayout(LayoutEventArgs e)
-            {
-                try
-                {
-                    base.OnLayout(e);
-                }
-                catch (ExternalException)
-                {
-                    // Bỏ qua lỗi GDI+ từ RepaintSplitterRect() khi chạy trong môi trường không có interactive DC;
-                    // bố cục Panel1/Panel2 đã được tính trước bước RepaintSplitterRect().
-                }
-            }
-        }
-
         private sealed class ColumnDragPayload
         {
             public ReportColumn Column { get; }

@@ -68,13 +68,7 @@ namespace De01_QLNhanSu
             Controls.AddRange(new Control[] { grpInfo, grpList });
 
             Load += frmQuanLyNhanVien_Load;
-            dgvDanhSach.SelectionChanged += dgvDanhSach_SelectionChanged;
-            btnThem.Click += btnThem_Click;
-            btnSua.Click += btnSua_Click;
-            btnXoa.Click += btnXoa_Click;
-            btnLamMoi.Click += btnLamMoi_Click;
             btnThongKe.Click += (s, e) => new frmThongKe().ShowDialog(this);
-            btnThoat.Click += btnThoat_Click;
         }
     }
 }

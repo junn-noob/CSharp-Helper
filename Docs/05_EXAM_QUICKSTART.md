@@ -52,16 +52,29 @@ Tài liệu này gom thẳng **quy trình thực chiến** và **bản đồ án
 
 ### Bước 3: Gặp yêu cầu nào trên Form 1 → Làm đúng cách đó
 
+> **Cách nhanh nhất (dùng `CrudBinder` — như `Samples/De01_QLNhanSu/frmQuanLyNhanVien.cs`):** Chỉ cần viết 1 khối cấu hình trong `Form_Load` để thư viện tự lo toàn bộ `SelectionChanged`, kiểm tra Schema + Regex + Tuổi, Thêm, Sửa, Xóa, Làm mới và Thoát:
+> ```csharp
+> CrudBinder.For(this, "NhanVien", "MaNV", txtMaNV, dgvDanhSach, "nhân viên")
+>     .WithCombo(cboPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB")
+>     .WithQuery(sql, /* GridColumn... */)
+>     .WithDefaultRadios(rdoNam)
+>     .WithExtraValidation(() => new[] { Validator.Pattern(...), Validator.DecimalRange(...), Validator.AgeRangeAtDate(...) })
+>     .BindButtons(btnThem, btnSua, btnXoa, btnLamMoi, btnThoat)
+>     .Start();
+> ```
+
+Nếu cần viết tay từng nút riêng, tra nhanh bảng dưới đây:
+
 | Yêu cầu trong đề | Đoạn code áp dụng ngay |
 |---|---|
 | **Nạp ComboBox nhập liệu khi mở Form** | `ComboBoxHelper.Bind(cboPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB");` *(Gọi **trước** `LoadData()`!)* |
 | **Hiển thị Grid có JOIN lấy tên + cột công thức (VD: Lương)** | Viết `SELECT nv.MaNV, nv.HoTen, ..., pb.TenPB, CAST(ROUND(nv.HeSoLuong * 2340000, 0) AS DECIMAL(18,0)) AS Luong, nv.GioiTinh, nv.MaPB FROM NhanVien nv JOIN PhongBan pb ON nv.MaPB = pb.MaPB`<br>Rồi gọi `GridHelper.Bind(dgvDanhSach, sql, new GridHelper.GridColumn(...), ...);`<br>*(Luôn giữ lại cột ẩn `nv.GioiTinh, nv.MaPB` ở cuối câu `SELECT` để click Grid tự nhảy đúng RadioButton & ComboBox.)* |
 | **Chọn 1 dòng Grid → đổ lên ô nhập & khóa ô Mã** | `var row = GridHelper.GetSelectedRow(dgvDanhSach);`<br>`if (row == null) return;`<br>`FormMapper.AutoLoad(this, row);`<br>`txtMaNV.ReadOnly = true;` |
-| **Kiểm tra dữ liệu trước khi Lưu + đưa con trỏ về ô sai** | Lấy schema bảng gốc ở `Form_Load`: `_schema = DbHelper.GetTableSchema("NhanVien");`<br>Khi Lưu gọi: `var val = Validator.FromSchema(this, _schema, Validator.Pattern(txtMaNV, "Mã NV", @"^NV\d{3}$"), Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m), Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi", 18, 120));`<br>`if (!val.IsValid) { MessageHelper.Warning(val.ErrorMessage); FormHelper.FocusControl(val.ErrorControl); return; }` |
+| **Kiểm tra dữ liệu trước khi Lưu + đưa con trỏ về ô sai** | Lấy schema bảng gốc ở `Form_Load`: `_schema = DbHelper.GetTableSchema("NhanVien");`<br>Khi Lưu gọi 1 dòng: `if (!Validator.CheckSchema(this, _schema, dgvDanhSach, Validator.Pattern(txtMaNV, "Mã NV", @"^NV\d{3}$"), Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m), Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi", 18, 120))) return;` |
 | **Kiểm tra trùng mã ở nút Thêm** | `string ma = txtMaNV.Text.Trim();`<br>`if (CrudHelper.Exists("NhanVien", "MaNV", ma)) { MessageHelper.DuplicateKey("Mã NV", ma); FormHelper.FocusControl(txtMaNV); return; }` |
 | **Thêm / Sửa xuống DB an toàn (`SqlParameter`)** | `var values = FormMapper.AutoGetValues(this, _schema);`<br>Thêm: `CrudHelper.Insert("NhanVien", values)`<br>Sửa: `CrudHelper.Update("NhanVien", values, "MaNV", ma)` *(Tự bỏ qua cột khóa không đổi)* |
 | **Nút Xóa (kiểm tra chọn dòng + hỏi đúng câu đề)** | `if (!GridHelper.HasSelection(dgvDanhSach)) { MessageHelper.NoSelection("nhân viên"); return; }`<br>`string ma = txtMaNV.Text.Trim();`<br>`if (MessageHelper.ConfirmDelete($"nhân viên {ma}") && CrudHelper.Delete("NhanVien", "MaNV", ma) > 0) { MessageHelper.Success("xóa"); LoadData(); }` |
-| **Nút Làm mới / Thống kê / Thoát** | Làm mới: `FormMapper.AutoClear(this); rdoNam.Checked = true; GridHelper.ClearSelection(dgvDanhSach); txtMaNV.ReadOnly = false; txtMaNV.Focus();`<br>Thống kê: `new frmThongKe().ShowDialog(this);`<br>Thoát: `if (MessageHelper.Confirm("Bạn có muốn thoát không?")) Application.Exit();` |
+| **Nút Làm mới / Thống kê / Thoát** | Làm mới: `FormMapper.AutoClear(this, rdoNam); GridHelper.ClearSelection(dgvDanhSach); txtMaNV.ReadOnly = false; txtMaNV.Focus();`<br>Thống kê: `new frmThongKe().ShowDialog(this);`<br>Thoát: `if (MessageHelper.Confirm("Bạn có muốn thoát không?")) Application.Exit();` |
 
 ---
 
@@ -70,7 +83,7 @@ Tài liệu này gom thẳng **quy trình thực chiến** và **bản đồ án
 | Yêu cầu trong đề | Đoạn code áp dụng ngay |
 |---|---|
 | **ComboBox có mục `"Tất cả"` chọn sẵn ở Form 2** | `ComboBoxHelper.BindWithAll(cboPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB", "Tất cả");`<br>`ComboBoxHelper.BindItems(cboGioiTinh, "Tất cả", "Nam", "Nữ");` |
-| **Lọc AND kết hợp nhiều điều kiện, rỗng báo không tìm thấy** | `var f = FilterBuilder.ForConnection().SkipIfAllSelected(cboPhongBan, "nv.MaPB");`<br>`if (cboGioiTinh.SelectedIndex == 1) f.Equal("nv.GioiTinh", 1);`<br>`else if (cboGioiTinh.SelectedIndex == 2) f.Equal("nv.GioiTinh", 0);`<br>`_dtKetQua = DbHelper.GetDataTable(sqlBase, f, "pb.TenPB, nv.MaNV");`<br>`GridHelper.Bind(dgvKetQua, _dtKetQua, ...);`<br>`if (!isInitial && _dtKetQua.Rows.Count == 0) MessageHelper.Info("Không tìm thấy dữ liệu phù hợp");` |
+| **Lọc AND kết hợp nhiều điều kiện, rỗng báo không tìm thấy** | `var f = FilterBuilder.ForConnection().SkipIfAllSelected(cboPhongBan, "nv.MaPB").MapIndex(cboGioiTinh, "nv.GioiTinh", 1, 0).ContainsAny(new[] { "nv.MaNV", "nv.HoTen" }, txtTuKhoa);`<br>`_dtKetQua = DbHelper.GetDataTable(sqlBase, f, "pb.TenPB, nv.MaNV");`<br>`GridHelper.Bind(dgvKetQua, _dtKetQua, ...);`<br>`if (!isInitial && _dtKetQua.Rows.Count == 0) MessageHelper.Info("Không tìm thấy dữ liệu phù hợp");` |
 | **Nhóm Thống kê: Đếm / Tổng / Trung bình / Max / Min** | `lblSoNV.Text = $"Số nhân viên: {DataHelper.Count(_dtKetQua)}";`<br>`lblTongLuong.Text = $"Tổng lương: {DataHelper.Sum(_dtKetQua, "Luong"):N0}";`<br>`lblHeSoMax.Text = $"Hệ số lương cao nhất: {DataHelper.Max<double>(_dtKetQua, "HeSoLuong"):0.##}";` |
 | **Báo cáo (tổng quát, bấm sửa trực tiếp, lưu mẫu `.examrpt`, xuất `.xlsx` / `.rdlc` / In)** | `if (_dtKetQua == null \|\| _dtKetQua.Rows.Count == 0) { MessageHelper.Warning("Không có dữ liệu để xuất báo cáo"); return; }`<br>`ReportHelper.ShowReport(_dtKetQua, "BẢNG LƯƠNG NHÂN VIÊN", $"Phòng ban: {cboPhongBan.Text}; Giới tính: {cboGioiTinh.Text}", "TenPB", "Phòng ban: ", cols, "CÔNG TY TNHH AN PHÁT", this);`<br>*(Trên Form mở ra có thể bấm thẳng vào Tiêu đề/Cột để sửa, nhấn **Lưu mẫu** dùng lại qua `ReportHelper.ShowReportFromTemplate(...)` hoặc nhấn **Xuất .rdlc** lấy file cho Visual Studio.)* |
 | **Báo cáo khi đề chấm bắt buộc RDLC / Crystal** | Bấm **Xuất .rdlc** ngay từ trình xem báo cáo (hoặc tự tạo `.rdlc`/`.rpt`), rồi gọi:<br>`ReportHelper.BindRdlc(reportViewer1, "dsBaoCao", _dtKetQua, parms);`<br>`ReportHelper.ExportRdlc(reportViewer1, "PDF", "BangLuong");` |

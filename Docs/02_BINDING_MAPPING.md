@@ -107,8 +107,8 @@ if (row != null) FormMapper.AutoLoad(this, row);
 DataTable schema = DbHelper.GetTableSchema("NhanVien");
 var values = FormMapper.AutoGetValues(this, schema);
 
-// Xóa trắng toàn bộ control nhập liệu
-FormMapper.AutoClear(this);
+// Xóa trắng toàn bộ control nhập liệu (có thể tick sẵn RadioButton mặc định)
+FormMapper.AutoClear(this, rdoNam);
 ```
 
 ### 3.2 Cách 2: Ánh xạ tường minh (`LoadRow` / `GetValues`)
@@ -142,6 +142,7 @@ Dictionary<string, object> GetValues(params FieldMapping[] mappings);
 Dictionary<string, object> AutoGetValues(Control container, DataTable schemaTable = null);
 void ClearControls(params Control[] controls);
 void AutoClear(Control container);
+void AutoClear(Control container, params RadioButton[] defaultCheckedRadios);
 ```
 
 > **Lưu ý kiểu số thực/tiền VN:** Khi dùng `AutoGetValues(this, schema)` (có schema `double`/`decimal`/`int`) hoặc `MapDouble`/`MapDecimal`/`MapInt`, chuỗi nhập `"2,34"` hay `"1.500.000"` đều được chuẩn hóa qua `DataHelper.TryParseDecimal` trước khi đưa xuống SQL.

@@ -202,6 +202,7 @@ FilterBuilder Equal(string column, object value, string paramName = null, bool s
 FilterBuilder SkipIfZero(string column, object value, string paramName = null);
 FilterBuilder NotEqual(string column, object value, string paramName = null, bool skipZero = false);
 FilterBuilder Contains(string column, string value, string paramName = null);
+FilterBuilder Contains(string column, Control keywordControl, string paramName = null);
 FilterBuilder StartsWith(string column, string value, string paramName = null);
 FilterBuilder EndsWith(string column, string value, string paramName = null);
 FilterBuilder GreaterThan(string column, object value, string paramName = null);
@@ -209,14 +210,18 @@ FilterBuilder GreaterThanOrEqual(string column, object value, string paramName =
 FilterBuilder LessThan(string column, object value, string paramName = null);
 FilterBuilder LessThanOrEqual(string column, object value, string paramName = null);
 FilterBuilder Between(string column, object min, object max, string paramMin = null, string paramMax = null);
+FilterBuilder BetweenDates(string column, DateTime? fromDate, DateTime? toDate);
 FilterBuilder DateBetween(string column, DateTime? fromDate, DateTime? toDate);
+FilterBuilder DateBetween(string column, DateTimePicker fromPicker, DateTimePicker toPicker);
 FilterBuilder In(string column, params object[] values);
 FilterBuilder NotIn(string column, params object[] values);
 FilterBuilder IsNull(string column);
 FilterBuilder IsNotNull(string column);
 FilterBuilder SkipIfAllSelected(ComboBox combo, string column, string paramName = null);
+FilterBuilder MapIndex(ComboBox combo, string column, params object[] valuesAfterAll);
 FilterBuilder Or(Action<FilterBuilder> configure);
 FilterBuilder ContainsAny(string[] columns, string value);
+FilterBuilder ContainsAny(string[] columns, Control keywordControl);
 FilterBuilder Raw(string condition, params SqlParameter[] rawParams);
 
 bool HasConditions { get; }
@@ -229,11 +234,9 @@ SqlParameter[] ToParameters();
 ```csharp
 var filter = FilterBuilder.ForConnection()
     .SkipIfAllSelected(cboPhongBan, "nv.MaPB")
-    .ContainsAny(new[] { "nv.MaNV", "nv.HoTen" }, txtTuKhoa.Text)
-    .DateBetween("nv.NgayVaoLam", dtpTuNgay.Value, dtpDenNgay.Value);
-
-if (cboGioiTinh.SelectedIndex == 1) filter.Equal("nv.GioiTinh", 1);
-else if (cboGioiTinh.SelectedIndex == 2) filter.Equal("nv.GioiTinh", 0);
+    .MapIndex(cboGioiTinh, "nv.GioiTinh", 1, 0)         // index 0 bỏ qua, 1 -> 1 (Nam), 2 -> 0 (Nữ)
+    .ContainsAny(new[] { "nv.MaNV", "nv.HoTen" }, txtTuKhoa)
+    .DateBetween("nv.NgayVaoLam", dtpTuNgay, dtpDenNgay);
 
 string sql = "SELECT nv.*, pb.TenPB FROM NhanVien nv JOIN PhongBan pb ON nv.MaPB = pb.MaPB";
 DataTable dt = DbHelper.GetDataTable(sql, filter, "pb.TenPB, nv.MaNV");

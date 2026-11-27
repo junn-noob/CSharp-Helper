@@ -42,17 +42,24 @@ Thay vì viết tay toàn bộ rule `Required` và `MaxLength` cho mọi ô nh�
 
 ```csharp
 ValidationResult FromSchema(Control container, DataTable schemaTable, params ValidationRule[] extraRules);
+ValidationResult FromSchema(Control container, DataTable schemaTable, DataGridView gridForLabels, params ValidationRule[] extraRules);
+
+// Kiểm tra 1 dòng: tự hiện MessageHelper.Warning + focus ô lỗi nếu sai, trả về true nếu hợp lệ
+bool Check(params ValidationRule[] rules);
+bool CheckSchema(Control container, DataTable schemaTable, params ValidationRule[] extraRules);
+bool CheckSchema(Control container, DataTable schemaTable, DataGridView gridForLabels, params ValidationRule[] extraRules);
 ```
 
 **Cơ chế của `FromSchema`:**
 1. Duyệt các control nhập liệu trong `container` (bỏ qua `CheckBox`, `RadioButton`, `DateTimePicker`).
 2. Khớp tên control với cột trong `schemaTable` (bỏ qua cột `AutoIncrement`).
-3. Tự kiểm tra:
+3. Tự lấy nhãn tiếng Việt từ tiêu đề cột của `gridForLabels` (nếu truyền vào) để thông báo lỗi tự nhiên như `"Họ tên không được để trống"`.
+4. Tự kiểm tra:
    - `!dc.AllowDBNull` → kiểm tra `Required` (hoặc `Selected` với `ComboBox`).
    - `dc.DataType == typeof(string)` & `dc.MaxLength > 0` → kiểm tra `MaxLength`.
    - Kiểu `int`/`short`/`long` → kiểm tra phải là số nguyên hợp lệ (nếu có nhập).
    - Kiểu `decimal`/`double`/`float` → kiểm tra phải là số hợp lệ (nếu có nhập).
-4. Cuối cùng chạy tuần tự toàn bộ `extraRules` truyền kèm.
+5. Cuối cùng chạy tuần tự toàn bộ `extraRules` truyền kèm.
 
 ---
 
@@ -62,19 +69,14 @@ ValidationResult FromSchema(Control container, DataTable schemaTable, params Val
 // Tính tuổi chính xác theo ngày và tháng sinh
 int age = Validator.CalculateAge(dtpNgaySinh.Value, dtpNgayVaoLam.Value);
 
-// Kiểm tra chuẩn kết hợp Schema + Nghiệp vụ đề thi
+// Kiểm tra gọn 1 dòng kết hợp Schema (lấy nhãn từ Grid) + Nghiệp vụ đề thi:
 DataTable schema = DbHelper.GetTableSchema("NhanVien");
-var val = Validator.FromSchema(this, schema,
+if (!Validator.CheckSchema(this, schema, dgvDanhSach,
     Validator.Pattern(txtMaNV, "Mã NV", @"^NV\d{3}$", "Mã NV phải có dạng NV + 3 chữ số!"),
     Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m, "Hệ số lương phải từ 2,34 – 8,0!"),
     Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi", 18, 120,
-        "Nhân viên phải đủ 18 tuổi tính đến ngày vào làm!")
-);
-
-if (!val.IsValid)
+        "Nhân viên phải đủ 18 tuổi tính đến ngày vào làm!")))
 {
-    MessageHelper.Warning(val.ErrorMessage);
-    FormHelper.FocusControl(val.ErrorControl);
     return;
 }
 ```

@@ -424,6 +424,19 @@ namespace ExamHelper.Binding
             }
         }
 
+        /// <summary>
+        /// Xóa/đặt lại mặc định tất cả control nhập liệu trong container và tự tick lại các <see cref="RadioButton"/> mặc định (ví dụ <c>rdoNam</c>).
+        /// </summary>
+        public static void AutoClear(Control container, params RadioButton[] defaultCheckedRadios)
+        {
+            AutoClear(container);
+            if (defaultCheckedRadios == null) return;
+            foreach (var rb in defaultCheckedRadios)
+            {
+                if (rb != null) rb.Checked = true;
+            }
+        }
+
         internal static IEnumerable<Control> EnumerateInputControls(Control root)
         {
             foreach (Control ctrl in root.Controls)

@@ -337,15 +337,70 @@ namespace ExamHelper.Validation
         }
 
         /// <summary>
+        /// Kiểm tra các quy tắc và tự động hiện cảnh báo + focus ô lỗi nếu có vi phạm.
+        /// Trả về true nếu hợp lệ để dùng gọn 1 dòng: <c>if (!Validator.Check(...)) return;</c>
+        /// </summary>
+        public static bool Check(params ValidationRule[] rules)
+        {
+            return ShowIfInvalid(ValidateAll(rules));
+        }
+
+        /// <summary>
+        /// Kiểm tra các quy tắc tại ngày tham chiếu và tự động hiện cảnh báo + focus ô lỗi nếu có vi phạm.
+        /// </summary>
+        public static bool Check(DateTime referenceDate, params ValidationRule[] rules)
+        {
+            return ShowIfInvalid(ValidateAll(referenceDate, rules));
+        }
+
+        /// <summary>
+        /// Tự động kiểm tra theo schema bảng + <paramref name="extraRules"/>, đồng thời tự hiện cảnh báo + focus ô lỗi nếu sai.
+        /// </summary>
+        public static bool CheckSchema(Control container, DataTable schemaTable, params ValidationRule[] extraRules)
+        {
+            return ShowIfInvalid(FromSchema(container, schemaTable, null, extraRules));
+        }
+
+        /// <summary>
+        /// Tự động kiểm tra theo schema bảng (tự lấy nhãn tiếng Việt từ tiêu đề cột trên <paramref name="gridForLabels"/>) + <paramref name="extraRules"/>,
+        /// tự hiện cảnh báo và focus ô lỗi nếu không hợp lệ.
+        /// </summary>
+        public static bool CheckSchema(Control container, DataTable schemaTable, DataGridView gridForLabels, params ValidationRule[] extraRules)
+        {
+            return ShowIfInvalid(FromSchema(container, schemaTable, gridForLabels, extraRules));
+        }
+
+        private static bool ShowIfInvalid(ValidationResult result)
+        {
+            if (result != null && !result.IsValid)
+            {
+                MessageHelper.Warning(result.ErrorMessage);
+                FormHelper.FocusControl(result.ErrorControl);
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Tự động kiểm tra toàn bộ control trên Form/container dựa theo cấu trúc bảng CSDL (NOT NULL, MaxLength, kiểu số nguyên/thực),
         /// sau đó kiểm tra thêm các quy tắc nghiệp vụ riêng (<paramref name="extraRules"/>) nếu có.
         /// </summary>
         public static ValidationResult FromSchema(Control container, DataTable schemaTable, params ValidationRule[] extraRules)
         {
+            return FromSchema(container, schemaTable, null, extraRules);
+        }
+
+        /// <summary>
+        /// Tự động kiểm tra theo schema bảng CSDL, ưu tiên lấy tên hiển thị tiếng Việt từ <paramref name="gridForLabels"/>,
+        /// sau đó kiểm tra thêm <paramref name="extraRules"/>.
+        /// </summary>
+        public static ValidationResult FromSchema(Control container, DataTable schemaTable, DataGridView gridForLabels, params ValidationRule[] extraRules)
+        {
             if (container != null && schemaTable != null)
             {
                 var autoRules = new List<ValidationRule>();
                 DataColumnCollection cols = schemaTable.Columns;
+                var gridLabels = BuildGridHeaderMap(gridForLabels);
 
                 foreach (Control ctrl in FormMapper.EnumerateInputControls(container))
                 {
@@ -361,9 +416,7 @@ namespace ExamHelper.Validation
                     if (dc.AutoIncrement)
                         continue;
 
-                    string label = !string.IsNullOrWhiteSpace(dc.Caption) && !string.Equals(dc.Caption, dc.ColumnName, StringComparison.Ordinal)
-                        ? dc.Caption
-                        : dc.ColumnName;
+                    string label = ResolveFieldLabel(dc, gridLabels);
 
                     if (!dc.AllowDBNull)
                     {
@@ -397,6 +450,31 @@ namespace ExamHelper.Validation
             }
 
             return ValidateAll(extraRules);
+        }
+
+        private static Dictionary<string, string> BuildGridHeaderMap(DataGridView grid)
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (grid == null) return map;
+
+            foreach (DataGridViewColumn gCol in grid.Columns)
+            {
+                string field = !string.IsNullOrWhiteSpace(gCol.DataPropertyName) ? gCol.DataPropertyName : gCol.Name;
+                if (!string.IsNullOrWhiteSpace(field) && !string.IsNullOrWhiteSpace(gCol.HeaderText) && !map.ContainsKey(field))
+                {
+                    map[field] = gCol.HeaderText.Trim();
+                }
+            }
+            return map;
+        }
+
+        private static string ResolveFieldLabel(DataColumn dc, Dictionary<string, string> gridLabels)
+        {
+            if (gridLabels != null && gridLabels.TryGetValue(dc.ColumnName, out string header) && !string.IsNullOrWhiteSpace(header))
+                return header;
+            if (!string.IsNullOrWhiteSpace(dc.Caption) && !string.Equals(dc.Caption, dc.ColumnName, StringComparison.Ordinal))
+                return dc.Caption;
+            return dc.ColumnName;
         }
 
         #endregion

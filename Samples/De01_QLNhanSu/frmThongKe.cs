@@ -22,9 +22,9 @@ namespace De01_QLNhanSu
 
         private void TimKiem(bool isInitial)
         {
-            var filter = FilterBuilder.New().SkipIfAllSelected(cboPhongBan, "nv.MaPB");
-            if (cboGioiTinh.SelectedIndex == 1) filter.Equal("nv.GioiTinh", 1);
-            else if (cboGioiTinh.SelectedIndex == 2) filter.Equal("nv.GioiTinh", 0);
+            var filter = FilterBuilder.ForConnection()
+                .SkipIfAllSelected(cboPhongBan, "nv.MaPB")
+                .MapIndex(cboGioiTinh, "nv.GioiTinh", 1, 0);
 
             string sql = @"SELECT nv.MaNV, nv.HoTen, CASE nv.GioiTinh WHEN 1 THEN N'Nam' ELSE N'Nữ' END AS GioiTinhHT,
                                   nv.NgaySinh, pb.TenPB, nv.HeSoLuong, nv.NgayVaoLam,

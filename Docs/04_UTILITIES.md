@@ -1,7 +1,7 @@
 # 04. MODULE UTILITIES, FORM TỔNG QUÁT & BÁO CÁO
 
 > **Namespace:** `ExamHelper.Utilities`  
-> **Thành phần:** `DataHelper`, `MessageHelper`, `FormHelper`, `FormGenericManager`, `ReportHelper`, `FormReportViewer`, `ReportTemplate`, `RdlcGenerator` (internal), `XlsxExporter` (internal), `ReportSummaryMode`, `ReportColumn`, `ReportDesignOptions`
+> **Thành phần:** `DataHelper`, `MessageHelper`, `FormHelper`, `CrudBinder`, `FormGenericManager`, `ReportHelper`, `FormReportViewer`, `ReportTemplate`, `RdlcGenerator` (internal), `XlsxExporter` (internal), `ReportSummaryMode`, `ReportColumn`, `ReportDesignOptions`
 
 ---
 
@@ -71,7 +71,27 @@ void FormatDatePickers(string customFormat, params DateTimePicker[] pickers);
 
 ---
 
-## 4. `FormGenericManager` — Form CRUD tự sinh từ bất kỳ bảng CSDL nào
+## 4. `CrudBinder` & `FormGenericManager` — Tự động hóa Form CRUD
+
+### 4.1 `CrudBinder` — Điều phối toàn bộ Form 1 CRUD trong 1 khối cấu hình
+Dùng cho **Form chính có JOIN bảng cha, cột tính toán và rule nghiệp vụ riêng**: chỉ khai báo trong `Form_Load`, không cần tự viết 5 sự kiện `SelectionChanged`, `btnThem`, `btnSua`, `btnXoa`, `btnLamMoi`, `btnThoat`:
+
+```csharp
+CrudBinder.For(this, tableName: "NhanVien", keyColumn: "MaNV", keyControl: txtMaNV, grid: dgvDanhSach, entityLabel: "nhân viên")
+    .WithCombo(cboPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB")
+    .WithQuery(sql, /* GridColumn... */)
+    .WithDefaultRadios(rdoNam)
+    .WithExtraValidation(() => new[]
+    {
+        Validator.Pattern(txtMaNV, "Mã NV", @"^NV\d{3}$"),
+        Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m),
+        Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi", 18, 120)
+    })
+    .BindButtons(btnThem, btnSua, btnXoa, btnLamMoi, btnThoat)
+    .Start();
+```
+
+### 4.2 `FormGenericManager` — Form CRUD tự sinh từ bất kỳ bảng CSDL nào
 
 Dành cho các bảng danh mục phụ (ví dụ: Quản lý Phòng ban, Loại sản phẩm, Khoa...) hoặc khi cần mở nhanh giao diện xem/thêm/sửa/xóa/tìm kiếm/báo cáo cho **bất kỳ CSDL hay bảng nào** mà không viết code riêng từng màn hình.
 
@@ -79,17 +99,18 @@ Dành cho các bảng danh mục phụ (ví dụ: Quản lý Phòng ban, Loại 
 // Mở danh sách tất cả bảng trong CSDL và tự sinh Form cho bảng đầu tiên:
 FormGenericManager.Open();
 
-// Hoặc mở đích danh bảng bất kỳ trên kết nối mặc định / kết nối chỉ định:
+// Hoặc mở đích danh bảng bất kỳ, kèm lookupQueries nếu muốn cột khóa ngoại tự hiện ComboBox:
 FormGenericManager.Open("PhongBan");
-FormGenericManager.Open("SanPham", dbName: "KhoHang", owner: this);
+FormGenericManager.Open("NhanVien", dbName: "default", owner: this,
+    lookupQueries: new Dictionary<string, string> { { "MaPB", "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB" } });
 ```
 
 **Cơ chế tự động:**
 - Gọi `DbHelper.GetTableNames` & `DbHelper.GetTableSchema` để đọc cột, khóa chính (`PrimaryKey`), `AutoIncrement`, `AllowDBNull`, `MaxLength`, `DataType`.
-- Sinh `CheckBox` (`bool`), `DateTimePicker` (`DateTime`, bật `ShowCheckBox` nếu cho phép `NULL`), `TextBox` (giới hạn `MaxLength`, khóa `ReadOnly` nếu `AutoIncrement`).
+- Sinh `ComboBox` (nếu có trong `lookupQueries`), `CheckBox` (`bool`), `DateTimePicker` (`DateTime`, bật `ShowCheckBox` nếu cho phép `NULL`), `TextBox` (giới hạn `MaxLength`, khóa `ReadOnly` nếu `AutoIncrement`).
 - Hỗ trợ tìm kiếm đa cột qua `FilterBuilder.ForConnection`, kiểm tra qua `Validator.FromSchema`, thêm/sửa/xóa qua `CrudHelper` (kể cả khóa phức hợp), và mở `ReportHelper.ShowReport`.
 
-> **Giới hạn thực tế của `FormGenericManager`:** Không tự JOIN bảng cha để biến cột khóa ngoại thành `ComboBox` chọn tên, không tự sinh cột tính toán công thức hay rule nghiệp vụ riêng (như kiểm tra tuổi theo ngày vào làm, Regex). Những form chính mang điểm cao vẫn nên dùng `FormMapper` + `Validator` + SQL `JOIN`.
+> **Giới hạn thực tế của `FormGenericManager`:** Không tự phát hiện tên hiển thị của bảng cha nếu bạn không truyền `lookupQueries`, không tự sinh cột tính toán công thức hay rule nghiệp vụ riêng (như tuổi tại ngày vào làm, Regex). Với Form 1 chấm điểm chính, hãy dùng **`CrudBinder`** hoặc `FormMapper` + `Validator` + SQL `JOIN`.
 
 ---
 

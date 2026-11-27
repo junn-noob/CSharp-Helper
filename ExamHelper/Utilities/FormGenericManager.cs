@@ -18,6 +18,7 @@ namespace ExamHelper.Utilities
     public class FormGenericManager : Form
     {
         private readonly string _dbName;
+        private readonly Dictionary<string, string> _lookupQueries;
         private readonly Dictionary<string, Control> _fieldControls = new Dictionary<string, Control>(StringComparer.OrdinalIgnoreCase);
 
         private string _currentTable;
@@ -66,7 +67,17 @@ namespace ExamHelper.Utilities
         /// <summary>Mở nhanh form quản lý tổng quát cho bất kỳ bảng nào trong CSDL.</summary>
         public static DialogResult Open(string tableName = null, string dbName = "default", IWin32Window owner = null)
         {
-            using (var form = new FormGenericManager(tableName, dbName))
+            return Open(tableName, dbName, owner, null);
+        }
+
+        /// <summary>
+        /// Mở nhanh form quản lý tổng quát cho bảng CSDL kèm tùy chọn <paramref name="lookupQueries"/>
+        /// (tên cột khóa ngoại → câu SQL SELECT Ma, Ten) để tự biến cột đó thành ComboBox chọn tên.
+        /// </summary>
+        public static DialogResult Open(string tableName, string dbName, IWin32Window owner,
+            IDictionary<string, string> lookupQueries)
+        {
+            using (var form = new FormGenericManager(tableName, dbName, lookupQueries))
             {
                 return owner != null ? form.ShowDialog(owner) : form.ShowDialog();
             }
@@ -76,9 +87,13 @@ namespace ExamHelper.Utilities
         /// Khởi tạo Form quản lý tự động theo schema bảng.
         /// Nếu <paramref name="tableName"/> để trống, Form tự đọc danh sách bảng từ CSDL và mở bảng đầu tiên.
         /// </summary>
-        public FormGenericManager(string tableName = null, string dbName = "default")
+        public FormGenericManager(string tableName = null, string dbName = "default",
+            IDictionary<string, string> lookupQueries = null)
         {
             _dbName = string.IsNullOrWhiteSpace(dbName) ? "default" : dbName;
+            _lookupQueries = lookupQueries != null
+                ? new Dictionary<string, string>(lookupQueries, StringComparer.OrdinalIgnoreCase)
+                : null;
             InitializeUi();
             LoadTableList(tableName);
         }
@@ -245,7 +260,7 @@ namespace ExamHelper.Utilities
             bottomBar.Controls.AddRange(new Control[] { _btnAdd, _btnUpdate, _btnDelete, _btnClear, _lblStatus });
 
             // 3. Khu vực chính: Form nhập sinh tự động (trái) + Lưới dữ liệu (phải)
-            _splitMain = new SplitContainer
+            _splitMain = new SafeSplitContainer
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Vertical,
@@ -417,8 +432,29 @@ namespace ExamHelper.Utilities
             }
         }
 
-        private static Control CreateEditorForColumn(DataColumn dc)
+        private Control CreateEditorForColumn(DataColumn dc)
         {
+            if (!dc.AutoIncrement && _lookupQueries != null &&
+                _lookupQueries.TryGetValue(dc.ColumnName, out string lookupSql) &&
+                !string.IsNullOrWhiteSpace(lookupSql))
+            {
+                var cbo = new ComboBox
+                {
+                    Dock = DockStyle.Fill,
+                    DropDownStyle = ComboBoxStyle.DropDownList
+                };
+                DataTable lookupDt = DbHelper.GetDataTable(lookupSql, _dbName);
+                if (lookupDt != null && lookupDt.Columns.Count >= 2)
+                {
+                    string valCol = lookupDt.Columns.Contains(dc.ColumnName) ? dc.ColumnName : lookupDt.Columns[0].ColumnName;
+                    string dispCol = lookupDt.Columns.Count > 1 && !string.Equals(lookupDt.Columns[1].ColumnName, valCol, StringComparison.OrdinalIgnoreCase)
+                        ? lookupDt.Columns[1].ColumnName
+                        : lookupDt.Columns[0].ColumnName;
+                    ComboBoxHelper.Bind(cbo, lookupDt, valCol, dispCol);
+                }
+                return cbo;
+            }
+
             if (dc.DataType == typeof(bool))
             {
                 return new CheckBox
@@ -503,7 +539,7 @@ namespace ExamHelper.Utilities
         private void ClearInputs()
         {
             FormMapper.AutoClear(_fieldsHost);
-            if (_grid != null) _grid.ClearSelection();
+            if (_grid != null) GridHelper.ClearSelection(_grid);
         }
 
         private Dictionary<string, object> CollectEditableValues(bool forInsert)

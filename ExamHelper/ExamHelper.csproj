@@ -9,18 +9,18 @@
     
     <!-- Thông tin NuGet / GitHub Package -->
     <PackageId>ExamHelper</PackageId>
-    <Version>1.2.1</Version>
+    <Version>1.3.0</Version>
     <Authors>ExamHelper Community</Authors>
     <Company>ExamHelper</Company>
     <Product>ExamHelper Pro</Product>
-    <Description>Thư viện C# WinForms (net472, net8.0-windows, net10.0-windows) hỗ trợ đa CSDL (SQL Server, SQLite, MySQL, PostgreSQL, OleDb, Odbc), CRUD, Auto Mapping, Validation theo Schema, FilterBuilder và trình thiết kế báo cáo kéo-thả lưu mẫu (.examrpt), xuất .rdlc &amp; Excel OpenXML (.xlsx).</Description>
+    <Description>Thư viện C# WinForms (net472, net8.0-windows, net10.0-windows) hỗ trợ đa CSDL (SQL Server, SQLite, MySQL, PostgreSQL, OleDb, Odbc), điều phối Form CRUD 1 khối (CrudBinder), Auto Mapping, Validation theo Schema nhãn tiếng Việt, FilterBuilder và trình thiết kế báo cáo kéo-thả lưu mẫu (.examrpt), xuất .rdlc &amp; Excel OpenXML (.xlsx).</Description>
     <PackageTags>winforms;csharp;dotnet;sqlserver;sqlite;mysql;postgresql;crud;validation;ado-net;filter;report;rdlc;excel;xlsx</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/junn-noob/CSharp-Helper</PackageProjectUrl>
     <RepositoryUrl>https://github.com/junn-noob/CSharp-Helper.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>v1.2.1: Khắc phục lỗi GDI+ SplitContainer.RepaintSplitterRect trên WinForms khi chạy qua ShowDialog/non-interactive DC, tự ẩn cột gom nhóm khi trích xuất báo cáo từ DataGridView và áp dụng trực tiếp vào bài mẫu De01_QLNhanSu.</PackageReleaseNotes>
+    <PackageReleaseNotes>v1.3.0: Thêm CrudBinder rút gọn toàn bộ Form 1 CRUD còn ~15 dòng cấu hình, Validator.Check / CheckSchema tự lấy nhãn Grid tiếng Việt, FilterBuilder.MapIndex / DateBetween(DateTimePicker) / ContainsAny(Control), FormMapper.AutoClear giữ radio mặc định, FormGenericManager lookupQueries khóa ngoại và GridHelper.SelectRowByValue hỗ trợ cột khóa ẩn.</PackageReleaseNotes>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

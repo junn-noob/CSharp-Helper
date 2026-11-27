@@ -162,6 +162,12 @@ namespace ExamHelper.Database
             return this;
         }
 
+        /// <summary>Tìm chuỗi chứa giá trị từ TextBox/Control: LIKE %value% (bỏ qua nếu rỗng).</summary>
+        public FilterBuilder Contains(string column, Control keywordControl, string paramName = null)
+        {
+            return keywordControl == null ? this : Contains(column, keywordControl.Text, paramName);
+        }
+
         /// <summary>
         /// Tìm chuỗi chứa giá trị: LIKE %value%.
         /// </summary>
@@ -382,6 +388,26 @@ namespace ExamHelper.Database
             return Between(column, fromDate, adjustedTo);
         }
 
+        /// <summary>Tên gọi đồng nghĩa với <see cref="BetweenDates"/> giúp viết điều kiện khoảng ngày trực quan hơn.</summary>
+        public FilterBuilder DateBetween(string column, DateTime? fromDate, DateTime? toDate)
+        {
+            return BetweenDates(column, fromDate, toDate);
+        }
+
+        /// <summary>
+        /// Lọc khoảng ngày trực tiếp từ 2 control DateTimePicker (tự động bỏ qua picker nào có <c>ShowCheckBox = true</c> nhưng chưa tick).
+        /// </summary>
+        public FilterBuilder DateBetween(string column, DateTimePicker fromPicker, DateTimePicker toPicker)
+        {
+            DateTime? from = (fromPicker != null && (!fromPicker.ShowCheckBox || fromPicker.Checked))
+                ? fromPicker.Value.Date
+                : (DateTime?)null;
+            DateTime? to = (toPicker != null && (!toPicker.ShowCheckBox || toPicker.Checked))
+                ? toPicker.Value.Date
+                : (DateTime?)null;
+            return BetweenDates(column, from, to);
+        }
+
         #endregion
 
         #region IN
@@ -500,6 +526,23 @@ namespace ExamHelper.Database
                 paramName);
         }
 
+        /// <summary>
+        /// Ánh xạ vị trí chọn của ComboBox (index 0 là "Tất cả" sẽ tự bỏ qua, index 1 → values[0], index 2 → values[1]...).
+        /// Dùng rất nhanh cho ComboBox cố định như Giới tính ("Tất cả", "Nam", "Nữ" → 1, 0) hoặc Trạng thái.
+        /// </summary>
+        public FilterBuilder MapIndex(ComboBox combo, string column, params object[] valuesAfterAll)
+        {
+            if (combo == null || combo.SelectedIndex <= 0 || valuesAfterAll == null)
+                return this;
+
+            int valIndex = combo.SelectedIndex - 1;
+            if (valIndex >= 0 && valIndex < valuesAfterAll.Length)
+            {
+                Equal(column, valuesAfterAll[valIndex]);
+            }
+            return this;
+        }
+
         #endregion
 
         #region Raw
@@ -551,6 +594,12 @@ namespace ExamHelper.Database
             }
 
             return this;
+        }
+
+        /// <summary>Tìm một từ khóa trực tiếp từ TextBox/Control trên nhiều cột bằng phép OR.</summary>
+        public FilterBuilder ContainsAny(string[] columns, Control keywordControl)
+        {
+            return keywordControl == null ? this : ContainsAny(columns, keywordControl.Text);
         }
 
         /// <summary>
