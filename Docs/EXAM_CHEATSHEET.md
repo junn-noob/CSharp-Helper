@@ -130,9 +130,9 @@ private void TimKiem(bool isInitial)
 
 ---
 
-## 5. Báo cáo & Xuất Excel / PDF
+## 5. Báo cáo & Mẫu báo cáo (`.examrpt` / `.rdlc` / Excel `.xlsx` / PDF)
 ```csharp
-// Cách 1: Mở FormReportViewer dùng chung (kéo-thả cột, gom nhóm, A4 Dọc/Ngang, xuất .xlsx OpenXML thật)
+// Cách 1: Mở FormReportViewer trực quan (bấm sửa thẳng trên preview, kéo-thả, lưu mẫu .examrpt, xuất .rdlc/.xlsx)
 ReportHelper.ShowReport(_dtKetQua, "BẢNG LƯƠNG NHÂN VIÊN",
     $"Phòng ban: {cboPhongBan.Text}; Giới tính: {cboGioiTinh.Text}", "TenPB", "Phòng ban: ",
     new[] {
@@ -143,7 +143,11 @@ ReportHelper.ShowReport(_dtKetQua, "BẢNG LƯƠNG NHÂN VIÊN",
         new ReportColumn("Luong", "Lương", "N0", HorizontalAlignment.Right, ReportSummaryMode.Sum)
     }, "CÔNG TY TNHH AN PHÁT", this);
 
-// Cách 2: Nếu đề bắt buộc RDLC / Crystal Report
+// Cách 2: Mở từ file mẫu .examrpt đã kéo-thả & lưu sẵn
+ReportHelper.ShowReportFromTemplate(_dtKetQua, "MauBangLuong.examrpt", overrideFilterCondition: dieuKien, owner: this);
+
+// Cách 3: Sinh file .rdlc tự động hoặc bind vào ReportViewer / Crystal Report
+ReportHelper.ExportRdlcFile(_dtKetQua, "BẢNG LƯƠNG", groupByColumn: "TenPB", dataSetName: "dsNhanVien", filePath: "rptBangLuong.rdlc");
 DataTable dtRpt = ReportHelper.PrepareReportTable(_dtKetQua);
 ReportHelper.BindRdlc(reportViewer1, "dsNhanVien", dtRpt, new Dictionary<string, string> { { "pDieuKienLoc", dieuKien } });
 ReportHelper.ExportRdlc(reportViewer1, "PDF", "BangLuong");

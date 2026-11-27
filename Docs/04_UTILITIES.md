@@ -1,7 +1,7 @@
 # 04. MODULE UTILITIES, FORM TỔNG QUÁT & BÁO CÁO
 
 > **Namespace:** `ExamHelper.Utilities`  
-> **Thành phần:** `DataHelper`, `MessageHelper`, `FormHelper`, `FormGenericManager`, `ReportHelper`, `FormReportViewer`, `XlsxExporter` (internal), `ReportSummaryMode`, `ReportColumn`, `ReportDesignOptions`
+> **Thành phần:** `DataHelper`, `MessageHelper`, `FormHelper`, `FormGenericManager`, `ReportHelper`, `FormReportViewer`, `ReportTemplate`, `RdlcGenerator` (internal), `XlsxExporter` (internal), `ReportSummaryMode`, `ReportColumn`, `ReportDesignOptions`
 
 ---
 
@@ -106,7 +106,10 @@ new ReportColumn("Diem", "Điểm", "0.##", HorizontalAlignment.Right, ReportSum
 ```
 
 ### 5.2 Hiển thị Form báo cáo trực quan dùng chung (`FormReportViewer`)
-`FormReportViewer` tự gom mọi trường dữ liệu vào 1 bảng, cho phép người dùng **kéo-thả ẩn/hiện/đổi thứ tự cột**, kéo cột vào vùng **gom nhóm**, đổi **Tiêu đề / Đơn vị / Điều kiện lọc / Người ký / Khổ giấy (`A4 Dọc` hoặc `A4 Ngang`) / Cỡ chữ**, đổi chế độ **Thống kê từng cột (`SUM`, `AVG`, `COUNT`, `MAX`, `MIN`)**, **In / Lưu PDF** qua `WebBrowser.ShowPrintDialog()`, và **Xuất Excel `.xlsx` chuẩn OpenXML** (tạo trực tiếp bằng `ZipArchive`, không cần cài Microsoft Excel).
+`FormReportViewer` tự gom mọi trường dữ liệu vào 1 bảng và hỗ trợ chỉnh sửa trực quan không cần viết lại code:
+- **Sửa trực tiếp ngay trên bản xem trước A4:** bấm thẳng vào **Đơn vị**, **Tiêu đề**, **Điều kiện lọc**, **Người ký** để sửa chữ, hoặc bấm thẳng vào **tiêu đề cột `<th>` trên bảng** (hoặc dấu `▾` / chuột phải trên chip) để đổi tên cột, di chuyển trái/phải, căn lề, định dạng, chọn thống kê (`SUM`/`AVG`/`COUNT`/`MAX`/`MIN`), gom nhóm hoặc ẩn cột.
+- **Kéo-thả sắp xếp & panel 2 tab gọn:** thanh chip kéo-thả + vùng kéo gom nhóm phía trên kèm panel trái 2 tab (`Cột & Nhóm` và `Tiêu đề & Trang`).
+- **Lưu/mở file mẫu & xuất đa định dạng:** **Lưu mẫu (`.examrpt`)**, **Mở mẫu**, **Xuất `.rdlc`**, **Xuất Excel `.xlsx` chuẩn OpenXML** (`ZipArchive`), **Xem trước**, **In / PDF**.
 
 ```csharp
 // 1. Truyền từ DataGridView hoặc câu SQL trực tiếp (tự nhận mọi cột):
@@ -140,11 +143,21 @@ ReportHelper.ShowReport(
     fontSizePt: 13);
 ```
 
-### 5.3 Sinh HTML / Xuất Excel `.xlsx` bằng code
+### 5.3 Lưu/mở file mẫu (`.examrpt`), sinh HTML, xuất `.xlsx` & sinh file `.rdlc`
 ```csharp
+// Lưu & dùng lại file mẫu báo cáo (.examrpt XML) thiết kế sẵn
+ReportHelper.ShowReportFromTemplate(dt, "Templates/MauBangLuong.examrpt", overrideFilterCondition: dieuKien, owner: this);
+ReportTemplate tpl = ReportHelper.LoadTemplate("Templates/MauBangLuong.examrpt");
+
+// Sinh HTML hoặc xuất Excel OpenXML (.xlsx)
 string html = ReportHelper.GenerateHtml(dt, "BÁO CÁO", columns: cols, landscape: true, fontSizePt: 14);
 byte[] xlsxBytes = ReportHelper.BuildXlsxBytes(dt, "BÁO CÁO", columns: cols, landscape: true, fontSizePt: 14);
 bool ok = ReportHelper.ExportXlsx(dt, "BÁO CÁO", columns: cols, landscape: true, fontSizePt: 14);
+
+// Sinh thẳng file .rdlc chuẩn Microsoft Report từ DataTable & cấu hình cột (khỏi vẽ tay Tablix trong Visual Studio)
+string rdlcXml = ReportHelper.GenerateRdlcXml(dt, "BẢNG LƯƠNG", groupByColumn: "TenPB", columns: cols, dataSetName: "dsNhanVien");
+ReportHelper.ExportRdlcFile(dt, "BẢNG LƯƠNG", groupByColumn: "TenPB", columns: cols, dataSetName: "dsNhanVien", filePath: "rptBangLuong.rdlc");
+
 DataTable dtWithStt = ReportHelper.PrepareReportTable(dt); // Chèn cột STT (1..N) ở đầu DataTable
 ```
 

@@ -27,7 +27,7 @@ Thư viện hỗ trợ SQL Server mặc định (`System.Data.SqlClient`) và m�
 
 ```text
 C# Helper/
-├── .github/workflows/package.yml        # CI build, test (66 tests), pack & publish GitHub Packages
+├── .github/workflows/package.yml        # CI build, test (69 tests), pack & publish GitHub Packages
 ├── .gitignore
 ├── CHANGELOG.md
 ├── LICENSE
@@ -52,11 +52,13 @@ C# Helper/
 │       ├── MessageHelper.cs             # Hộp thoại chuẩn tiếng Việt + SuppressDialogs phục vụ test
 │       ├── FormHelper.cs                # ToggleButtons, FocusControl, FormatCurrency, FormatDatePickers
 │       ├── FormGenericManager.cs        # Form CRUD + tìm kiếm + báo cáo tự sinh từ schema bất kỳ bảng nào
-│       ├── ReportHelper.cs              # ReportColumn, ReportSummaryMode, GenerateHtml, ShowReport, RDLC/Crystal Reflection
-│       ├── FormReportViewer.cs          # Trình xem & thiết kế báo cáo kéo-thả cột, gom nhóm, khổ giấy, cỡ chữ
+│       ├── ReportHelper.cs              # ReportColumn, ReportSummaryMode, GenerateHtml, ShowReport/FromTemplate, RDLC/Crystal
+│       ├── FormReportViewer.cs          # Thiết kế báo cáo 2 tab, kéo-thả cột, bấm sửa trên preview, lưu .examrpt & xuất .rdlc
+│       ├── ReportTemplate.cs            # Lưu/nạp file mẫu báo cáo (.examrpt XML) dùng chung nhiều form/bài thi
+│       ├── RdlcGenerator.cs             # Sinh file thiết kế Microsoft Report (.rdlc RDL 2008) từ bố cục kéo-thả
 │       └── XlsxExporter.cs              # Xuất OpenXML .xlsx trực tiếp bằng ZipArchive (không cần cài Excel)
 │
-├── ExamHelper.Tests/                    # Kiểm thử tự động xUnit (66 unit tests)
+├── ExamHelper.Tests/                    # Kiểm thử tự động xUnit (69 unit tests)
 │   └── ExamHelperTests.cs
 │
 ├── Samples/
@@ -76,19 +78,19 @@ C# Helper/
 Dự án được đóng gói chuẩn NuGet SDK (`PackageId: ExamHelper`, hỗ trợ `net472`, `net8.0-windows`, `net10.0-windows`) để nhiều người hoặc nhiều project dùng chung qua một trong 3 cách:
 
 ### Cách 1: Cài qua GitHub Packages (khuyên dùng cho nhóm / nhiều máy)
-Khi đẩy tag phiên bản (ví dụ `v1.1.0`), GitHub Actions tự động build, chạy test và xuất bản gói lên GitHub Packages + GitHub Releases.
+Khi đẩy tag phiên bản (ví dụ `v1.2.0`), GitHub Actions tự động build, chạy test và xuất bản gói lên GitHub Packages + GitHub Releases.
 
 ```powershell
 # Thêm nguồn NuGet GitHub Packages (cần GitHub PAT có quyền read:packages)
 dotnet nuget add source --username <GITHUB_USERNAME> --password <GITHUB_TOKEN> --store-password-in-clear-text --name github-examhelper "https://nuget.pkg.github.com/junn-noob/index.json"
 
 # Cài vào project WinForms của bạn
-dotnet add package ExamHelper --version 1.1.0
+dotnet add package ExamHelper --version 1.2.0
 ```
 
 ### Cách 2: Tự đóng gói `.nupkg` & chia sẻ qua thư mục NuGet nội bộ / USB / Releases
 ```powershell
-# Tạo file ExamHelper.1.1.0.nupkg
+# Tạo file ExamHelper.1.2.0.nupkg
 dotnet pack ExamHelper/ExamHelper.csproj -c Release -o ./nupkgs
 
 # Trỏ project dùng file .nupkg từ thư mục cục bộ hoặc thư mục dùng chung của nhóm
@@ -113,7 +115,7 @@ dotnet add <YourApp.csproj> reference libs/CSharp-Helper/ExamHelper/ExamHelper.c
 # Build toàn bộ thư viện (net472, net8.0-windows, net10.0-windows) và project test
 dotnet build ExamHelper.sln
 
-# Chạy toàn bộ bộ kiểm thử tự động (66 tests)
+# Chạy toàn bộ bộ kiểm thử tự động (69 tests)
 dotnet test ExamHelper.sln --no-restore
 
 # Build bài mẫu Đề 01

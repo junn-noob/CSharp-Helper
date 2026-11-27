@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Data;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace ExamHelper.Utilities
@@ -18,6 +19,7 @@ namespace ExamHelper.Utilities
         public string GroupByColumn { get; set; }
         public string GroupPrefix { get; set; }
         public IEnumerable<ReportColumn> Columns { get; set; }
+        public IEnumerable<ReportColumn> HiddenColumns { get; set; }
         public string CompanyName { get; set; } = "ĐƠN VỊ QUẢN LÝ";
         public string SignerTitle { get; set; } = "Người lập biểu";
         public bool ShowGroupTotals { get; set; }
@@ -30,8 +32,33 @@ namespace ExamHelper.Utilities
     }
 
     /// <summary>
-    /// Form xem trước và thiết kế báo cáo trực quan: cho phép kéo-thả ẩn/hiện/sắp xếp/gom nhóm cột,
-    /// sửa tiêu đề và thuộc tính ngay trên giao diện trước khi In/Lưu PDF hoặc Xuất Excel.
+    /// Cầu nối COM cho sự kiện bấm trực tiếp trên vùng xem trước HTML của <see cref="FormReportViewer"/>.
+    /// </summary>
+    [ComVisible(true)]
+    public sealed class ReportPreviewBridge
+    {
+        private readonly FormReportViewer _owner;
+
+        internal ReportPreviewBridge(FormReportViewer owner)
+        {
+            _owner = owner;
+        }
+
+        public void OnPreviewClick(string action)
+        {
+            if (_owner == null || _owner.IsDisposed || string.IsNullOrWhiteSpace(action)) return;
+
+            if (_owner.InvokeRequired)
+                _owner.BeginInvoke((Action)(() => _owner.HandlePreviewClick(action)));
+            else
+                _owner.HandlePreviewClick(action);
+        }
+    }
+
+    /// <summary>
+    /// Form xem trước và thiết kế báo cáo trực quan: hỗ trợ kéo-thả ẩn/hiện/sắp xếp/gom nhóm cột,
+    /// bấm trực tiếp vào tiêu đề hoặc cột trên bản xem trước để sửa, lưu/mở file mẫu (.examrpt)
+    /// và xuất trực tiếp file thiết kế .rdlc / Excel (.xlsx) / In PDF.
     /// </summary>
     public class FormReportViewer : Form
     {
@@ -102,6 +129,7 @@ namespace ExamHelper.Utilities
         private WebBrowser _webViewer;
         private Panel _previewHost;
         private SplitContainer _splitMain;
+        private TabControl _designerTabs;
 
         private TextBox _txtQuickTitle;
         private Panel _pnlQuickGroupDrop;
@@ -110,10 +138,14 @@ namespace ExamHelper.Utilities
         private FlowLayoutPanel _chipStrip;
         private Button _btnQuickShowHidden;
         private ContextMenuStrip _hiddenColumnsMenu;
+        private ContextMenuStrip _columnActionMenu;
 
         private Button _btnIn;
         private Button _btnXemTruoc;
         private Button _btnXuatExcel;
+        private Button _btnXuatRdlc;
+        private Button _btnLuuMau;
+        private Button _btnMoMau;
         private Button _btnThietKe;
         private Button _btnDatLai;
         private Button _btnDong;
@@ -147,7 +179,7 @@ namespace ExamHelper.Utilities
         private ComboBox _cboColFormat;
         private ComboBox _cboColSummary;
 
-        /// <summary>Mã HTML hiện tại phản ánh đúng các chỉnh sửa thiết kế mới nhất.</summary>
+        /// <summary>Mã HTML thuần (in ấn/lưu) phản ánh các chỉnh sửa thiết kế mới nhất.</summary>
         public string CurrentHtml => _currentHtml;
 
         /// <summary>Danh sách cột đang hiển thị trên báo cáo.</summary>
@@ -286,7 +318,7 @@ namespace ExamHelper.Utilities
 
         /// <summary>
         /// Khởi tạo form báo cáo trực quan từ DataTable, tự gom tất cả trường dữ liệu
-        /// và cho phép kéo-thả chỉnh sửa ngay trước khi In / Xuất PDF / Xuất Excel.
+        /// và cho phép kéo-thả chỉnh sửa, lưu file mẫu (.examrpt) hoặc xuất .rdlc.
         /// </summary>
         public FormReportViewer(DataTable dataTable, ReportDesignOptions options = null)
         {
@@ -320,13 +352,15 @@ namespace ExamHelper.Utilities
 
             var autoCols = ReportHelper.BuildAutoColumns(_sourceTable, null, null);
             var explicitCols = _initialOptions.Columns?.Where(c => c != null && !string.IsNullOrWhiteSpace(c.ColumnName)).ToList();
+            var explicitHiddenCols = _initialOptions.HiddenColumns?.Where(c => c != null && !string.IsNullOrWhiteSpace(c.ColumnName)).ToList();
             var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             if (explicitCols != null && explicitCols.Count > 0)
             {
                 foreach (var col in explicitCols)
                 {
-                    if (usedNames.Add(col.ColumnName))
+                    if ((_sourceTable.Columns.Count == 0 || _sourceTable.Columns.Contains(col.ColumnName))
+                        && usedNames.Add(col.ColumnName))
                     {
                         _initialVisibleColumns.Add(col.Clone());
                     }
@@ -344,6 +378,18 @@ namespace ExamHelper.Utilities
                     if (usedNames.Add(col.ColumnName))
                     {
                         _initialVisibleColumns.Add(col.Clone());
+                    }
+                }
+            }
+
+            if (explicitHiddenCols != null)
+            {
+                foreach (var col in explicitHiddenCols)
+                {
+                    if ((_sourceTable.Columns.Count == 0 || _sourceTable.Columns.Contains(col.ColumnName))
+                        && usedNames.Add(col.ColumnName))
+                    {
+                        _initialHiddenColumns.Add(col.Clone());
                     }
                 }
             }
@@ -394,6 +440,193 @@ namespace ExamHelper.Utilities
             Text = _reportTitle;
             SyncAllUiFromState();
             RebuildHtml(immediate: true);
+        }
+
+        /// <summary>Trích xuất thiết kế hiện tại thành đối tượng <see cref="ReportTemplate"/> để lưu thành file.</summary>
+        public ReportTemplate ToTemplate()
+        {
+            var template = new ReportTemplate
+            {
+                ReportTitle = _reportTitle ?? "BÁO CÁO THỐNG KÊ",
+                CompanyName = _companyName ?? "ĐƠN VỊ QUẢN LÝ",
+                FilterCondition = _filterCondition ?? "",
+                GroupByColumn = _groupByColumn ?? "",
+                GroupPrefix = _groupPrefix ?? "",
+                SignerTitle = _signerTitle ?? "Người lập biểu",
+                PageFooter = _pageFooter ?? "Trang 1/1",
+                DateFormat = _dateFormat ?? "dd/MM/yyyy",
+                ShowGroupTotals = _showGroupTotals,
+                ShowStt = _showStt,
+                Landscape = _landscape,
+                FontSizePt = _fontSizePt
+            };
+
+            foreach (var col in _visibleColumns)
+                template.Columns.Add(new ReportTemplateColumn(col, visible: true));
+            foreach (var col in _hiddenColumns)
+                template.Columns.Add(new ReportTemplateColumn(col, visible: false));
+
+            return template;
+        }
+
+        /// <summary>Áp dụng một đối tượng <see cref="ReportTemplate"/> lên giao diện báo cáo đang mở.</summary>
+        public void ApplyTemplate(ReportTemplate template, bool preserveCurrentFilterIfEmpty = false)
+        {
+            if (!_isDynamicMode || template == null) return;
+
+            string effectiveFilter = preserveCurrentFilterIfEmpty && string.IsNullOrWhiteSpace(template.FilterCondition)
+                ? _filterCondition
+                : (template.FilterCondition ?? "");
+
+            ReportDesignOptions opts = template.ToDesignOptions(_sourceTable, effectiveFilter, openDesigner: true);
+            _reportTitle = opts.ReportTitle;
+            _companyName = opts.CompanyName;
+            _filterCondition = opts.FilterCondition;
+            _signerTitle = opts.SignerTitle;
+            _pageFooter = opts.PageFooter;
+            _dateFormat = opts.DateFormat;
+            _groupByColumn = opts.GroupByColumn;
+            _groupPrefix = opts.GroupPrefix;
+            _showGroupTotals = opts.ShowGroupTotals;
+            _showStt = opts.ShowStt;
+            _landscape = opts.Landscape;
+            _fontSizePt = Clamp(opts.FontSizePt, 9, 22);
+
+            _visibleColumns.Clear();
+            _hiddenColumns.Clear();
+
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (opts.Columns != null)
+            {
+                foreach (var c in opts.Columns)
+                {
+                    if ((_sourceTable.Columns.Count == 0 || _sourceTable.Columns.Contains(c.ColumnName))
+                        && used.Add(c.ColumnName))
+                    {
+                        _visibleColumns.Add(c.Clone());
+                    }
+                }
+            }
+            if (opts.HiddenColumns != null)
+            {
+                foreach (var c in opts.HiddenColumns)
+                {
+                    if ((_sourceTable.Columns.Count == 0 || _sourceTable.Columns.Contains(c.ColumnName))
+                        && used.Add(c.ColumnName))
+                    {
+                        _hiddenColumns.Add(c.Clone());
+                    }
+                }
+            }
+            foreach (var autoCol in ReportHelper.BuildAutoColumns(_sourceTable, null, null))
+            {
+                if (used.Add(autoCol.ColumnName))
+                {
+                    _hiddenColumns.Add(autoCol);
+                }
+            }
+
+            _selectedVisibleColumn = _visibleColumns.FirstOrDefault();
+            Text = string.IsNullOrWhiteSpace(_reportTitle) ? "Báo cáo thống kê" : _reportTitle;
+            SyncAllUiFromState();
+            RebuildHtml(immediate: true);
+        }
+
+        /// <summary>Lưu bố cục thiết kế hiện tại ra file mẫu (.examrpt / .xml).</summary>
+        public bool SaveTemplateFile(string filePath = null)
+        {
+            if (!_isDynamicMode) return false;
+            if (!EnsurePrintable()) return false;
+
+            string targetPath = filePath;
+            if (string.IsNullOrWhiteSpace(targetPath))
+            {
+                string safeName = ReportHelper.SanitizeFileName(_reportTitle, "MauBaoCao");
+                if (!safeName.EndsWith(".examrpt", StringComparison.OrdinalIgnoreCase))
+                    safeName += ".examrpt";
+
+                using (var sfd = new SaveFileDialog
+                {
+                    Filter = "Mẫu báo cáo ExamHelper (*.examrpt)|*.examrpt|XML File (*.xml)|*.xml",
+                    FileName = safeName
+                })
+                {
+                    if (sfd.ShowDialog() != DialogResult.OK)
+                        return false;
+                    targetPath = sfd.FileName;
+                }
+            }
+
+            try
+            {
+                ToTemplate().Save(targetPath);
+                if (string.IsNullOrWhiteSpace(filePath))
+                    MessageHelper.Success("lưu mẫu báo cáo");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageHelper.Error("Lỗi khi lưu mẫu báo cáo: " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>Nạp bố cục từ file mẫu (.examrpt / .xml) lên báo cáo đang mở.</summary>
+        public bool LoadTemplateFile(string filePath = null)
+        {
+            if (!_isDynamicMode) return false;
+
+            string sourcePath = filePath;
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                using (var ofd = new OpenFileDialog
+                {
+                    Filter = "Mẫu báo cáo ExamHelper (*.examrpt;*.xml)|*.examrpt;*.xml|Tất cả (*.*)|*.*"
+                })
+                {
+                    if (ofd.ShowDialog() != DialogResult.OK)
+                        return false;
+                    sourcePath = ofd.FileName;
+                }
+            }
+
+            try
+            {
+                ReportTemplate template = ReportTemplate.Load(sourcePath);
+                ApplyTemplate(template, preserveCurrentFilterIfEmpty: true);
+                if (string.IsNullOrWhiteSpace(filePath))
+                    MessageHelper.Success("nạp mẫu báo cáo");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageHelper.Error("Lỗi khi đọc mẫu báo cáo: " + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>Sinh chuỗi XML .rdlc theo bố cục thiết kế hiện tại.</summary>
+        public string BuildRdlcXml(string dataSetName = "dsBaoCao")
+        {
+            if (!_isDynamicMode)
+                throw new InvalidOperationException("Chế độ HTML tĩnh không hỗ trợ sinh file .rdlc.");
+
+            return ReportHelper.GenerateRdlcXml(
+                _sourceTable, _reportTitle, _filterCondition, _groupByColumn, _groupPrefix,
+                _visibleColumns, _companyName, _signerTitle, _showGroupTotals, _pageFooter,
+                _dateFormat, _showStt, _landscape, _fontSizePt, dataSetName);
+        }
+
+        /// <summary>Xuất thiết kế báo cáo hiện tại thành file .rdlc chuẩn Microsoft Report.</summary>
+        public bool ExportRdlcFile(string filePath = null, string dataSetName = "dsBaoCao")
+        {
+            if (!_isDynamicMode) return false;
+            if (!EnsurePrintable()) return false;
+
+            return ReportHelper.ExportRdlcFile(
+                _sourceTable, _reportTitle, _filterCondition, _groupByColumn, _groupPrefix,
+                _visibleColumns, _companyName, _signerTitle, _showGroupTotals, _pageFooter,
+                _dateFormat, _showStt, _landscape, _fontSizePt, dataSetName, filePath);
         }
 
         /// <summary>Ẩn một cột đang hiển thị sang danh sách cột bị ẩn.</summary>
@@ -462,7 +695,6 @@ namespace ExamHelper.Utilities
             return true;
         }
 
-        /// <summary>Sắp xếp lại vị trí trong danh sách cột đang ẩn.</summary>
         private bool MoveHiddenColumn(string columnName, int newIndex)
         {
             if (string.IsNullOrWhiteSpace(columnName)) return false;
@@ -492,7 +724,6 @@ namespace ExamHelper.Utilities
 
             if (!string.IsNullOrEmpty(normalized))
             {
-                // Tự động chuyển cột gom nhóm sang danh sách ẩn để tránh lặp giá trị thừa trong bảng chi tiết
                 int visIdx = _visibleColumns.FindIndex(c => string.Equals(c.ColumnName, normalized, StringComparison.OrdinalIgnoreCase));
                 if (visIdx >= 0)
                 {
@@ -526,10 +757,201 @@ namespace ExamHelper.Utilities
             return match != null ? match.HeaderText : columnName;
         }
 
+        internal void HandlePreviewClick(string action)
+        {
+            if (!_isDynamicMode || string.IsNullOrWhiteSpace(action)) return;
+
+            if (action == "company")
+            {
+                if (TryPromptText("Sửa tên đơn vị", "Đơn vị / Công ty:", _companyName, out string newVal))
+                    ReportCompanyName = newVal;
+            }
+            else if (action == "title")
+            {
+                if (TryPromptText("Sửa tiêu đề báo cáo", "Tiêu đề báo cáo:", _reportTitle, out string newVal))
+                    ReportTitle = newVal;
+            }
+            else if (action == "filter")
+            {
+                if (TryPromptText("Sửa điều kiện lọc", "Điều kiện lọc (để trống nếu muốn ẩn):", _filterCondition, out string newVal))
+                    FilterCondition = newVal;
+            }
+            else if (action == "signer")
+            {
+                if (TryPromptText("Sửa chức danh người ký", "Chức danh người ký:", _signerTitle, out string newVal))
+                {
+                    _signerTitle = newVal ?? "";
+                    if (_txtSigner != null) SetControlText(_txtSigner, _signerTitle);
+                    RebuildHtml(immediate: true);
+                }
+            }
+            else if (action.StartsWith("col:", StringComparison.OrdinalIgnoreCase))
+            {
+                string colName = action.Substring(4);
+                var target = _visibleColumns.FirstOrDefault(c => string.Equals(c.ColumnName, colName, StringComparison.OrdinalIgnoreCase));
+                if (target != null)
+                {
+                    SelectVisibleColumn(target);
+                    ShowColumnActionMenu(target, Cursor.Position);
+                }
+            }
+        }
+
+        private void SelectVisibleColumn(ReportColumn col)
+        {
+            _selectedVisibleColumn = col;
+            if (_lstVisible != null)
+            {
+                _isSyncingUi = true;
+                _lstVisible.SelectedIndex = _visibleColumns.IndexOf(col);
+                _isSyncingUi = false;
+            }
+            SyncSelectedColumnEditor();
+            RebuildColumnChips();
+        }
+
+        private void ShowColumnActionMenu(ReportColumn col, Point screenPoint)
+        {
+            if (col == null) return;
+            _columnActionMenu?.Dispose();
+            _columnActionMenu = new ContextMenuStrip();
+
+            int idx = _visibleColumns.IndexOf(col);
+
+            var miRename = new ToolStripMenuItem($"Đổi tên cột \"{col.HeaderText}\"...");
+            miRename.Click += (s, e) =>
+            {
+                if (TryPromptText("Đổi tiêu đề cột", $"Tiêu đề hiển thị cho cột '{col.ColumnName}':", col.HeaderText, out string newHeader))
+                {
+                    col.HeaderText = string.IsNullOrWhiteSpace(newHeader) ? col.ColumnName : newHeader.Trim();
+                    SyncSelectedColumnEditor();
+                    _lstVisible?.Invalidate();
+                    RebuildColumnChips();
+                    RebuildHtml(immediate: true);
+                }
+            };
+            _columnActionMenu.Items.Add(miRename);
+            _columnActionMenu.Items.Add(new ToolStripSeparator());
+
+            var miLeft = new ToolStripMenuItem("Di chuyển sang trái ◀") { Enabled = idx > 0 };
+            miLeft.Click += (s, e) => MoveVisibleColumn(col.ColumnName, idx - 1);
+            var miRight = new ToolStripMenuItem("Di chuyển sang phải ▶") { Enabled = idx >= 0 && idx < _visibleColumns.Count - 1 };
+            miRight.Click += (s, e) => MoveVisibleColumn(col.ColumnName, idx + 1);
+            _columnActionMenu.Items.Add(miLeft);
+            _columnActionMenu.Items.Add(miRight);
+            _columnActionMenu.Items.Add(new ToolStripSeparator());
+
+            var miAlign = new ToolStripMenuItem("Căn lề");
+            miAlign.DropDownItems.Add(CreateAlignMenuItem("Trái", col, HorizontalAlignment.Left));
+            miAlign.DropDownItems.Add(CreateAlignMenuItem("Giữa", col, HorizontalAlignment.Center));
+            miAlign.DropDownItems.Add(CreateAlignMenuItem("Phải", col, HorizontalAlignment.Right));
+            _columnActionMenu.Items.Add(miAlign);
+
+            var miFormat = new ToolStripMenuItem("Định dạng hiển thị");
+            miFormat.DropDownItems.Add(CreateFormatMenuItem("Mặc định (không định dạng)", col, null));
+            miFormat.DropDownItems.Add(CreateFormatMenuItem("Số nguyên (N0 - vd: 15.000.000)", col, "N0"));
+            miFormat.DropDownItems.Add(CreateFormatMenuItem("Số thập phân gọn (0.##)", col, "0.##"));
+            miFormat.DropDownItems.Add(CreateFormatMenuItem("Ngày (dd/MM/yyyy)", col, "dd/MM/yyyy"));
+            miFormat.DropDownItems.Add(CreateFormatMenuItem("Ngày giờ (dd/MM/yyyy HH:mm)", col, "dd/MM/yyyy HH:mm"));
+            _columnActionMenu.Items.Add(miFormat);
+
+            var miSummary = new ToolStripMenuItem("Thống kê cuối bảng");
+            miSummary.DropDownItems.Add(CreateSummaryMenuItem("Không thống kê", col, ReportSummaryMode.None));
+            miSummary.DropDownItems.Add(CreateSummaryMenuItem("Tổng (SUM)", col, ReportSummaryMode.Sum));
+            miSummary.DropDownItems.Add(CreateSummaryMenuItem("Trung bình (AVG)", col, ReportSummaryMode.Average));
+            miSummary.DropDownItems.Add(CreateSummaryMenuItem("Đếm dòng (COUNT)", col, ReportSummaryMode.Count));
+            miSummary.DropDownItems.Add(CreateSummaryMenuItem("Lớn nhất (MAX)", col, ReportSummaryMode.Max));
+            miSummary.DropDownItems.Add(CreateSummaryMenuItem("Nhỏ nhất (MIN)", col, ReportSummaryMode.Min));
+            _columnActionMenu.Items.Add(miSummary);
+
+            _columnActionMenu.Items.Add(new ToolStripSeparator());
+
+            var miGroup = new ToolStripMenuItem($"Gom nhóm theo \"{col.HeaderText}\"");
+            miGroup.Click += (s, e) => SetGroupByColumn(col.ColumnName);
+            _columnActionMenu.Items.Add(miGroup);
+
+            var miHide = new ToolStripMenuItem("Ẩn cột này khỏi báo cáo") { ForeColor = Color.FromArgb(185, 28, 28) };
+            miHide.Click += (s, e) => HideColumn(col.ColumnName);
+            _columnActionMenu.Items.Add(miHide);
+
+            _columnActionMenu.Show(screenPoint);
+        }
+
+        private ToolStripMenuItem CreateAlignMenuItem(string text, ReportColumn col, HorizontalAlignment align)
+        {
+            var item = new ToolStripMenuItem(text) { Checked = col.Alignment == align };
+            item.Click += (s, e) =>
+            {
+                col.Alignment = align;
+                SyncSelectedColumnEditor();
+                RebuildHtml(immediate: true);
+            };
+            return item;
+        }
+
+        private ToolStripMenuItem CreateFormatMenuItem(string text, ReportColumn col, string format)
+        {
+            string current = string.IsNullOrWhiteSpace(col.Format) ? null : col.Format.Trim();
+            var item = new ToolStripMenuItem(text) { Checked = string.Equals(current, format, StringComparison.OrdinalIgnoreCase) };
+            item.Click += (s, e) =>
+            {
+                col.Format = format;
+                SyncSelectedColumnEditor();
+                RebuildHtml(immediate: true);
+            };
+            return item;
+        }
+
+        private ToolStripMenuItem CreateSummaryMenuItem(string text, ReportColumn col, ReportSummaryMode mode)
+        {
+            var item = new ToolStripMenuItem(text) { Checked = col.SummaryMode == mode };
+            item.Click += (s, e) =>
+            {
+                col.SummaryMode = mode;
+                SyncSelectedColumnEditor();
+                _lstVisible?.Invalidate();
+                RebuildColumnChips();
+                RebuildHtml(immediate: true);
+            };
+            return item;
+        }
+
+        private bool TryPromptText(string title, string promptLabel, string initialValue, out string result)
+        {
+            result = initialValue;
+            using (var dlg = new Form
+            {
+                Text = title,
+                Size = new Size(440, 155),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                Font = Font
+            })
+            {
+                var lbl = new Label { Text = promptLabel, Left = 14, Top = 12, Width = 395 };
+                var txt = new TextBox { Text = initialValue ?? "", Left = 14, Top = 36, Width = 395 };
+                var btnOk = new Button { Text = "Áp dụng", DialogResult = DialogResult.OK, Left = 240, Top = 74, Width = 84, Height = 28 };
+                var btnCancel = new Button { Text = "Hủy", DialogResult = DialogResult.Cancel, Left = 330, Top = 74, Width = 78, Height = 28 };
+                dlg.Controls.AddRange(new Control[] { lbl, txt, btnOk, btnCancel });
+                dlg.AcceptButton = btnOk;
+                dlg.CancelButton = btnCancel;
+                dlg.Shown += (s, e) => { txt.Focus(); txt.SelectAll(); };
+
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    result = txt.Text;
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private void InitializeShellUi(bool openDesigner)
         {
             Text = string.IsNullOrWhiteSpace(_reportTitle) ? "Báo cáo thống kê" : _reportTitle;
-            Size = _isDynamicMode ? new Size(1160, 760) : new Size(960, 720);
+            Size = _isDynamicMode ? new Size(1180, 770) : new Size(960, 720);
             MinimumSize = new Size(860, 600);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9f);
@@ -544,52 +966,33 @@ namespace ExamHelper.Utilities
                 if (_previewDirty) RebuildHtml(immediate: true);
             };
 
-            // 1. Thanh công cụ trên cùng
-            var topPanel = new Panel
+            // 1. Thanh công cụ trên cùng dạng FlowLayout tự dàn hàng sạch sẽ
+            var topPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 46,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = true,
                 BackColor = Color.FromArgb(245, 247, 250),
-                Padding = new Padding(10, 6, 10, 6)
+                Padding = new Padding(8, 6, 8, 6)
             };
 
-            _btnIn = new Button
-            {
-                Text = "In / PDF (&P)",
-                Width = 112,
-                Height = 32,
-                Left = 12,
-                Top = 7,
-                Font = new Font(Font, FontStyle.Bold)
-            };
+            _btnIn = CreateToolbarButton("In / PDF (&P)", 106, bold: true);
             _btnIn.Click += (s, e) =>
             {
                 if (!EnsurePrintable()) return;
                 _webViewer?.ShowPrintDialog();
             };
 
-            _btnXemTruoc = new Button
-            {
-                Text = "Xem trước (&V)",
-                Width = 116,
-                Height = 32,
-                Left = 132,
-                Top = 7
-            };
+            _btnXemTruoc = CreateToolbarButton("Xem trước (&V)", 108);
             _btnXemTruoc.Click += (s, e) =>
             {
                 if (!EnsurePrintable()) return;
                 _webViewer?.ShowPrintPreviewDialog();
             };
 
-            _btnXuatExcel = new Button
-            {
-                Text = "Xuất Excel (&E)",
-                Width = 118,
-                Height = 32,
-                Left = 256,
-                Top = 7
-            };
+            _btnXuatExcel = CreateToolbarButton("Xuất Excel (&E)", 110);
             _btnXuatExcel.Click += (s, e) =>
             {
                 if (!EnsurePrintable()) return;
@@ -606,50 +1009,40 @@ namespace ExamHelper.Utilities
                 }
             };
 
-            _btnThietKe = new Button
-            {
-                Text = openDesigner ? "Ẩn thiết kế (&D)" : "Thiết kế (&D)",
-                Width = 122,
-                Height = 32,
-                Left = 382,
-                Top = 7,
-                Visible = _isDynamicMode
-            };
+            _btnXuatRdlc = CreateToolbarButton("Xuất .rdlc (&R)", 104, visible: _isDynamicMode);
+            _btnXuatRdlc.Click += (s, e) => ExportRdlcFile();
+
+            _btnLuuMau = CreateToolbarButton("Lưu mẫu (&S)", 98, visible: _isDynamicMode);
+            _btnLuuMau.Click += (s, e) => SaveTemplateFile();
+
+            _btnMoMau = CreateToolbarButton("Mở mẫu (&O)", 96, visible: _isDynamicMode);
+            _btnMoMau.Click += (s, e) => LoadTemplateFile();
+
+            _btnThietKe = CreateToolbarButton(openDesigner ? "Ẩn thiết kế (&D)" : "Thiết kế (&D)", 114, visible: _isDynamicMode);
             _btnThietKe.Click += (s, e) =>
             {
                 _splitMain.Panel1Collapsed = !_splitMain.Panel1Collapsed;
                 _btnThietKe.Text = _splitMain.Panel1Collapsed ? "Thiết kế (&D)" : "Ẩn thiết kế (&D)";
             };
 
-            _btnDatLai = new Button
-            {
-                Text = "↺ Mặc định",
-                Width = 96,
-                Height = 32,
-                Left = 512,
-                Top = 7,
-                Visible = _isDynamicMode
-            };
+            _btnDatLai = CreateToolbarButton("↺ Mặc định", 88, visible: _isDynamicMode);
             _btnDatLai.Click += (s, e) => ResetDesign();
 
-            _btnDong = new Button
-            {
-                Text = "Đóng (&N)",
-                Width = 92,
-                Height = 32,
-                Left = _isDynamicMode ? 616 : 382,
-                Top = 7
-            };
+            _btnDong = CreateToolbarButton("Đóng (&N)", 84);
             _btnDong.Click += (s, e) => Close();
 
-            topPanel.Controls.AddRange(new Control[] { _btnIn, _btnXemTruoc, _btnXuatExcel, _btnThietKe, _btnDatLai, _btnDong });
+            topPanel.Controls.AddRange(new Control[]
+            {
+                _btnIn, _btnXemTruoc, _btnXuatExcel, _btnXuatRdlc,
+                _btnLuuMau, _btnMoMau, _btnThietKe, _btnDatLai, _btnDong
+            });
 
-            // 2. Vùng chính: Panel thiết kế bên trái + Xem trước bên phải
+            // 2. Vùng chính: Panel thiết kế 2 tab gọn gàng bên trái + Xem trước tương tác bên phải
             _splitMain = new SplitContainer
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Vertical,
-                Size = new Size(1140, 670),
+                Size = new Size(1160, 670),
                 SplitterWidth = 5
             };
             ((ISupportInitialize)_splitMain).BeginInit();
@@ -670,9 +1063,9 @@ namespace ExamHelper.Utilities
             Controls.Add(_splitMain);
             Controls.Add(topPanel);
 
-            _splitMain.Panel1MinSize = 350;
+            _splitMain.Panel1MinSize = 330;
             _splitMain.Panel2MinSize = 360;
-            _splitMain.SplitterDistance = 395;
+            _splitMain.SplitterDistance = 370;
             _splitMain.Panel1Collapsed = !_isDynamicMode || !openDesigner;
             _splitMain.ResumeLayout(false);
             ((ISupportInitialize)_splitMain).EndInit();
@@ -681,6 +1074,19 @@ namespace ExamHelper.Utilities
             {
                 EnsureWebViewer();
                 RenderCurrentHtmlToBrowser();
+            };
+        }
+
+        private Button CreateToolbarButton(string text, int width, bool bold = false, bool visible = true)
+        {
+            return new Button
+            {
+                Text = text,
+                Width = width,
+                Height = 30,
+                Margin = new Padding(3, 2, 3, 2),
+                Font = bold ? _boldFont : Font,
+                Visible = visible
             };
         }
 
@@ -806,7 +1212,6 @@ namespace ExamHelper.Utilities
 
             inlineBar.Controls.AddRange(new Control[] { lblQuickTitle, _txtQuickTitle, _pnlQuickGroupDrop, _btnQuickClearGroup });
 
-            // Thứ tự Dock: _chipStrip ngay trên _previewHost, inlineBar nằm trên cùng
             host.Controls.Add(_chipStrip);
             host.Controls.Add(inlineBar);
         }
@@ -824,7 +1229,7 @@ namespace ExamHelper.Utilities
 
                 _chipStrip.Controls.Add(new Label
                 {
-                    Text = "Kéo-thả cột:",
+                    Text = "Cột (kéo xếp / bấm chỉnh):",
                     AutoSize = true,
                     Padding = new Padding(0, 6, 4, 0),
                     Font = _boldFont,
@@ -868,16 +1273,30 @@ namespace ExamHelper.Utilities
                         Text = $"⋮⋮ {col.HeaderText}{sumTag}",
                         AutoSize = true,
                         ForeColor = isSelected ? Color.White : Color.FromArgb(15, 23, 42),
-                        Padding = new Padding(0, 2, 4, 0),
+                        Padding = new Padding(0, 2, 2, 0),
                         AllowDrop = true,
                         Cursor = Cursors.Hand
+                    };
+
+                    var btnMenu = new Label
+                    {
+                        Text = "▾",
+                        AutoSize = true,
+                        ForeColor = isSelected ? Color.FromArgb(226, 232, 240) : Color.FromArgb(71, 85, 105),
+                        Padding = new Padding(2, 1, 2, 0),
+                        Cursor = Cursors.Hand
+                    };
+                    btnMenu.Click += (s, e) =>
+                    {
+                        SelectVisibleColumn(col);
+                        ShowColumnActionMenu(col, btnMenu.PointToScreen(new Point(0, btnMenu.Height)));
                     };
 
                     var btnHide = new Label
                     {
                         Text = "×",
                         AutoSize = true,
-                        ForeColor = isSelected ? Color.FromArgb(226, 232, 240) : Color.FromArgb(185, 28, 28),
+                        ForeColor = isSelected ? Color.FromArgb(254, 226, 226) : Color.FromArgb(185, 28, 28),
                         Font = _boldFont,
                         Padding = new Padding(2, 1, 2, 0),
                         Cursor = Cursors.Hand
@@ -889,6 +1308,7 @@ namespace ExamHelper.Utilities
                     AttachChipEvents(lbl, col, i);
 
                     flow.Controls.Add(lbl);
+                    flow.Controls.Add(btnMenu);
                     flow.Controls.Add(btnHide);
                     chip.Controls.Add(flow);
                     _chipStrip.Controls.Add(chip);
@@ -908,18 +1328,19 @@ namespace ExamHelper.Utilities
 
         private void AttachChipEvents(Control ctrl, ReportColumn col, int index)
         {
-            ctrl.Click += (s, e) =>
+            ctrl.MouseUp += (s, e) =>
             {
-                _selectedVisibleColumn = col;
-                if (_lstVisible != null)
+                _pendingDragChipCtrl = null;
+                _pendingDragChipCol = null;
+                _pendingDragChipIdx = -1;
+                if (e.Button == MouseButtons.Right)
                 {
-                    _isSyncingUi = true;
-                    _lstVisible.SelectedIndex = _visibleColumns.IndexOf(col);
-                    _isSyncingUi = false;
+                    SelectVisibleColumn(col);
+                    ShowColumnActionMenu(col, ctrl.PointToScreen(e.Location));
                 }
-                SyncSelectedColumnEditor();
-                RebuildColumnChips();
             };
+
+            ctrl.Click += (s, e) => SelectVisibleColumn(col);
 
             ctrl.MouseDown += (s, e) =>
             {
@@ -945,13 +1366,6 @@ namespace ExamHelper.Utilities
                 _pendingDragChipIdx = -1;
 
                 ctrl.DoDragDrop(new ColumnDragPayload(dragCol, _lstVisible, dragIdx), DragDropEffects.Move);
-            };
-
-            ctrl.MouseUp += (s, e) =>
-            {
-                _pendingDragChipCtrl = null;
-                _pendingDragChipCol = null;
-                _pendingDragChipIdx = -1;
             };
 
             ctrl.DragOver += (s, e) =>
@@ -995,129 +1409,38 @@ namespace ExamHelper.Utilities
         private void BuildDesignerPanel(SplitterPanel host)
         {
             host.BackColor = Color.FromArgb(249, 250, 252);
-            host.Padding = new Padding(8);
+            host.Padding = new Padding(6);
 
-            // A. Thông tin báo cáo
-            var grpHeader = new GroupBox
-            {
-                Text = "1. Tiêu đề - Thông tin báo cáo",
-                Dock = DockStyle.Top,
-                Width = 360,
-                Height = 202,
-                Padding = new Padding(8, 6, 8, 6)
-            };
+            _designerTabs = new TabControl { Dock = DockStyle.Fill };
 
-            int y = 22;
-            grpHeader.Controls.Add(new Label { Text = "Tiêu đề:", Left = 10, Top = y + 3, Width = 78 });
-            _txtTitle = new TextBox { Left = 92, Top = y, Width = 258, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-            _txtTitle.TextChanged += (s, e) =>
+            var tabColumns = new TabPage("Cột & Nhóm")
             {
-                if (_isSyncingUi) return;
-                _reportTitle = _txtTitle.Text;
-                Text = string.IsNullOrWhiteSpace(_reportTitle) ? "Báo cáo thống kê" : _reportTitle;
-                if (_txtQuickTitle != null) SetControlText(_txtQuickTitle, _reportTitle);
-                SchedulePreviewRefresh();
+                BackColor = Color.FromArgb(249, 250, 252),
+                Padding = new Padding(6)
             };
-            grpHeader.Controls.Add(_txtTitle);
+            BuildColumnsAndGroupTab(tabColumns);
 
-            y += 28;
-            grpHeader.Controls.Add(new Label { Text = "Đơn vị:", Left = 10, Top = y + 3, Width = 78 });
-            _txtCompany = new TextBox { Left = 92, Top = y, Width = 258, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-            _txtCompany.TextChanged += (s, e) =>
+            var tabHeaderPage = new TabPage("Tiêu đề & Trang")
             {
-                if (_isSyncingUi) return;
-                _companyName = _txtCompany.Text;
-                SchedulePreviewRefresh();
+                BackColor = Color.FromArgb(249, 250, 252),
+                Padding = new Padding(8),
+                AutoScroll = true
             };
-            grpHeader.Controls.Add(_txtCompany);
+            BuildHeaderAndPageTab(tabHeaderPage);
 
-            y += 28;
-            grpHeader.Controls.Add(new Label { Text = "Điều kiện lọc:", Left = 10, Top = y + 3, Width = 78 });
-            _txtFilter = new TextBox { Left = 92, Top = y, Width = 258, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-            _txtFilter.TextChanged += (s, e) =>
-            {
-                if (_isSyncingUi) return;
-                _filterCondition = _txtFilter.Text;
-                SchedulePreviewRefresh();
-            };
-            grpHeader.Controls.Add(_txtFilter);
+            _designerTabs.TabPages.Add(tabColumns);
+            _designerTabs.TabPages.Add(tabHeaderPage);
+            host.Controls.Add(_designerTabs);
+        }
 
-            y += 28;
-            grpHeader.Controls.Add(new Label { Text = "Người ký:", Left = 10, Top = y + 3, Width = 78 });
-            _txtSigner = new TextBox { Left = 92, Top = y, Width = 110 };
-            _txtSigner.TextChanged += (s, e) =>
-            {
-                if (_isSyncingUi) return;
-                _signerTitle = _txtSigner.Text;
-                SchedulePreviewRefresh();
-            };
-            grpHeader.Controls.Add(_txtSigner);
-
-            grpHeader.Controls.Add(new Label { Text = "Trang:", Left = 208, Top = y + 3, Width = 44 });
-            _txtFooter = new TextBox { Left = 254, Top = y, Width = 96, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-            _txtFooter.TextChanged += (s, e) =>
-            {
-                if (_isSyncingUi) return;
-                _pageFooter = _txtFooter.Text;
-                SchedulePreviewRefresh();
-            };
-            grpHeader.Controls.Add(_txtFooter);
-
-            y += 28;
-            _chkShowStt = new CheckBox { Text = "Hiện cột STT", Left = 12, Top = y, Width = 120, Checked = true };
-            _chkShowStt.CheckedChanged += (s, e) =>
-            {
-                if (_isSyncingUi) return;
-                _showStt = _chkShowStt.Checked;
-                RebuildHtml(immediate: true);
-            };
-            _chkGroupTotals = new CheckBox { Text = "Hiện tổng từng nhóm", Left = 148, Top = y, Width = 190 };
-            _chkGroupTotals.CheckedChanged += (s, e) =>
-            {
-                if (_isSyncingUi) return;
-                _showGroupTotals = _chkGroupTotals.Checked;
-                RebuildHtml(immediate: true);
-            };
-            grpHeader.Controls.AddRange(new Control[] { _chkShowStt, _chkGroupTotals });
-
-            y += 26;
-            grpHeader.Controls.Add(new Label { Text = "Khổ giấy:", Left = 10, Top = y + 3, Width = 64 });
-            _cboPaperOrientation = new ComboBox { Left = 76, Top = y, Width = 104, DropDownStyle = ComboBoxStyle.DropDownList };
-            _cboPaperOrientation.Items.AddRange(new object[] { "A4 Dọc", "A4 Ngang" });
-            _cboPaperOrientation.SelectedIndex = 0;
-            _cboPaperOrientation.SelectedIndexChanged += (s, e) =>
-            {
-                if (_isSyncingUi) return;
-                _landscape = _cboPaperOrientation.SelectedIndex == 1;
-                RebuildHtml(immediate: true);
-            };
-            grpHeader.Controls.Add(_cboPaperOrientation);
-
-            grpHeader.Controls.Add(new Label { Text = "Cỡ chữ:", Left = 192, Top = y + 3, Width = 54 });
-            _nudFontSize = new NumericUpDown
-            {
-                Left = 248,
-                Top = y,
-                Width = 64,
-                Minimum = 9,
-                Maximum = 22,
-                Value = 13
-            };
-            _nudFontSize.ValueChanged += (s, e) =>
-            {
-                if (_isSyncingUi) return;
-                _fontSizePt = (int)_nudFontSize.Value;
-                SchedulePreviewRefresh();
-            };
-            grpHeader.Controls.Add(_nudFontSize);
-
-            // B. Gom nhóm (Drop Zone)
+        private void BuildColumnsAndGroupTab(TabPage host)
+        {
+            // A. Gom nhóm
             var grpGroup = new GroupBox
             {
-                Text = "2. Gom nhóm (Kéo thả cột vào đây)",
+                Text = "Gom nhóm (Kéo thả cột vào đây)",
                 Dock = DockStyle.Top,
-                Width = 360,
-                Height = 98,
+                Height = 96,
                 Padding = new Padding(8, 6, 8, 6)
             };
 
@@ -1125,7 +1448,7 @@ namespace ExamHelper.Utilities
             {
                 Left = 10,
                 Top = 20,
-                Width = 340,
+                Width = 315,
                 Height = 32,
                 BorderStyle = BorderStyle.FixedSingle,
                 BackColor = Color.FromArgb(239, 246, 255),
@@ -1147,8 +1470,8 @@ namespace ExamHelper.Utilities
             _cboGroupBy = new ComboBox
             {
                 Left = 10,
-                Top = 60,
-                Width = 135,
+                Top = 59,
+                Width = 128,
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
             _cboGroupBy.SelectedIndexChanged += (s, e) =>
@@ -1158,11 +1481,11 @@ namespace ExamHelper.Utilities
                 SetGroupByColumn(item?.ColumnName);
             };
 
-            _btnClearGroup = new Button { Text = "✕", Left = 149, Top = 59, Width = 28, Height = 24 };
+            _btnClearGroup = new Button { Text = "✕", Left = 142, Top = 58, Width = 28, Height = 24 };
             _btnClearGroup.Click += (s, e) => SetGroupByColumn(null);
 
-            grpGroup.Controls.Add(new Label { Text = "Nhãn:", Left = 183, Top = 63, Width = 40 });
-            _txtGroupPrefix = new TextBox { Left = 224, Top = 60, Width = 126, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            grpGroup.Controls.Add(new Label { Text = "Nhãn:", Left = 175, Top = 62, Width = 40 });
+            _txtGroupPrefix = new TextBox { Left = 216, Top = 59, Width = 109, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             _txtGroupPrefix.TextChanged += (s, e) =>
             {
                 if (_isSyncingUi) return;
@@ -1172,12 +1495,11 @@ namespace ExamHelper.Utilities
 
             grpGroup.Controls.AddRange(new Control[] { _pnlGroupDrop, _cboGroupBy, _btnClearGroup, _txtGroupPrefix });
 
-            // D. Thuộc tính cột đang chọn (Dock Bottom)
+            // B. Sửa cột đang chọn (Dock Bottom)
             var grpColProps = new GroupBox
             {
-                Text = "4. Sửa cột đang chọn",
+                Text = "Cột đang chọn",
                 Dock = DockStyle.Bottom,
-                Width = 360,
                 Height = 134,
                 Padding = new Padding(8, 6, 8, 6)
             };
@@ -1186,7 +1508,7 @@ namespace ExamHelper.Utilities
             {
                 Left = 10,
                 Top = 20,
-                Width = 340,
+                Width = 315,
                 Text = "Chọn 1 cột bên 'Hiện' để sửa",
                 Font = new Font(Font, FontStyle.Italic),
                 ForeColor = Color.FromArgb(75, 85, 99),
@@ -1194,8 +1516,8 @@ namespace ExamHelper.Utilities
             };
             grpColProps.Controls.Add(_lblEditingCol);
 
-            grpColProps.Controls.Add(new Label { Text = "Tên cột:", Left = 10, Top = 47, Width = 70 });
-            _txtColHeader = new TextBox { Left = 84, Top = 44, Width = 266, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            grpColProps.Controls.Add(new Label { Text = "Tên cột:", Left = 10, Top = 47, Width = 68 });
+            _txtColHeader = new TextBox { Left = 82, Top = 44, Width = 243, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             _txtColHeader.TextChanged += (s, e) =>
             {
                 if (_isSyncingUi || _selectedVisibleColumn == null) return;
@@ -1206,8 +1528,8 @@ namespace ExamHelper.Utilities
             };
             grpColProps.Controls.Add(_txtColHeader);
 
-            grpColProps.Controls.Add(new Label { Text = "Căn lề:", Left = 10, Top = 76, Width = 52 });
-            _cboColAlign = new ComboBox { Left = 64, Top = 73, Width = 88, DropDownStyle = ComboBoxStyle.DropDownList };
+            grpColProps.Controls.Add(new Label { Text = "Căn lề:", Left = 10, Top = 76, Width = 50 });
+            _cboColAlign = new ComboBox { Left = 62, Top = 73, Width = 84, DropDownStyle = ComboBoxStyle.DropDownList };
             _cboColAlign.Items.AddRange(new object[] { "Trái", "Giữa", "Phải" });
             _cboColAlign.SelectedIndexChanged += (s, e) =>
             {
@@ -1219,8 +1541,8 @@ namespace ExamHelper.Utilities
             };
             grpColProps.Controls.Add(_cboColAlign);
 
-            grpColProps.Controls.Add(new Label { Text = "Định dạng:", Left = 158, Top = 76, Width = 68 });
-            _cboColFormat = new ComboBox { Left = 228, Top = 73, Width = 122, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            grpColProps.Controls.Add(new Label { Text = "Định dạng:", Left = 152, Top = 76, Width = 66 });
+            _cboColFormat = new ComboBox { Left = 220, Top = 73, Width = 105, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             _cboColFormat.Items.AddRange(new object[] { "", "N0", "N2", "0.##", "dd/MM/yyyy", "dd/MM/yyyy HH:mm" });
             _cboColFormat.TextChanged += (s, e) =>
             {
@@ -1235,7 +1557,7 @@ namespace ExamHelper.Utilities
             {
                 Left = 82,
                 Top = 101,
-                Width = 268,
+                Width = 243,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
@@ -1258,12 +1580,11 @@ namespace ExamHelper.Utilities
             };
             grpColProps.Controls.Add(_cboColSummary);
 
-            // C. Kéo thả ẩn/hiện & sắp xếp cột (Dock Fill)
+            // C. Danh sách Cột Hiện / Ẩn (Dock Fill — thoáng chiều cao tối đa)
             var grpColumns = new GroupBox
             {
-                Text = "3. Kéo thả cột (Ẩn / Hiện / Đổi thứ tự)",
+                Text = "Kéo thả cột (Ẩn / Hiện / Đổi thứ tự)",
                 Dock = DockStyle.Fill,
-                Width = 360,
                 Padding = new Padding(8, 6, 8, 6)
             };
 
@@ -1279,7 +1600,7 @@ namespace ExamHelper.Utilities
             colLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
             var barVis = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0) };
-            barVis.Controls.Add(new Label { Text = "Hiện:", AutoSize = true, Padding = new Padding(0, 5, 3, 0), Font = new Font(Font, FontStyle.Bold), ForeColor = Color.FromArgb(22, 101, 52) });
+            barVis.Controls.Add(new Label { Text = "Hiện:", AutoSize = true, Padding = new Padding(0, 5, 3, 0), Font = _boldFont, ForeColor = Color.FromArgb(22, 101, 52) });
             _btnMoveUp = new Button { Text = "▲", Width = 26, Height = 23, Margin = new Padding(2, 2, 1, 0) };
             _btnMoveDown = new Button { Text = "▼", Width = 26, Height = 23, Margin = new Padding(1, 2, 1, 0) };
             _btnHideCol = new Button { Text = "Ẩn →", Width = 48, Height = 23, Margin = new Padding(3, 2, 0, 0) };
@@ -1292,7 +1613,7 @@ namespace ExamHelper.Utilities
             barVis.Controls.AddRange(new Control[] { _btnMoveUp, _btnMoveDown, _btnHideCol });
 
             var barHid = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(4, 0, 0, 0) };
-            barHid.Controls.Add(new Label { Text = "Ẩn:", AutoSize = true, Padding = new Padding(0, 5, 3, 0), Font = new Font(Font, FontStyle.Bold), ForeColor = Color.FromArgb(153, 27, 27) });
+            barHid.Controls.Add(new Label { Text = "Ẩn:", AutoSize = true, Padding = new Padding(0, 5, 3, 0), Font = _boldFont, ForeColor = Color.FromArgb(153, 27, 27) });
             _btnShowCol = new Button { Text = "← Hiện", Width = 58, Height = 23, Margin = new Padding(2, 2, 0, 0) };
             _btnShowCol.Click += (s, e) =>
             {
@@ -1327,11 +1648,135 @@ namespace ExamHelper.Utilities
             colLayout.Controls.Add(_lstHidden, 1, 1);
             grpColumns.Controls.Add(colLayout);
 
-            // Thứ tự Dock rất quan trọng: Fill thêm trước (hoặc sau cùng nếu BringToFront), Top/Bottom bao quanh
             host.Controls.Add(grpColumns);
             host.Controls.Add(grpGroup);
-            host.Controls.Add(grpHeader);
             host.Controls.Add(grpColProps);
+        }
+
+        private void BuildHeaderAndPageTab(TabPage host)
+        {
+            var grpInfo = new GroupBox
+            {
+                Text = "Thông tin đầu & cuối trang",
+                Dock = DockStyle.Top,
+                Height = 205,
+                Padding = new Padding(10, 8, 10, 8)
+            };
+
+            int y = 26;
+            grpInfo.Controls.Add(new Label { Text = "Tiêu đề:", Left = 10, Top = y + 3, Width = 82 });
+            _txtTitle = new TextBox { Left = 96, Top = y, Width = 225, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            _txtTitle.TextChanged += (s, e) =>
+            {
+                if (_isSyncingUi) return;
+                _reportTitle = _txtTitle.Text;
+                Text = string.IsNullOrWhiteSpace(_reportTitle) ? "Báo cáo thống kê" : _reportTitle;
+                if (_txtQuickTitle != null) SetControlText(_txtQuickTitle, _reportTitle);
+                SchedulePreviewRefresh();
+            };
+            grpInfo.Controls.Add(_txtTitle);
+
+            y += 32;
+            grpInfo.Controls.Add(new Label { Text = "Đơn vị:", Left = 10, Top = y + 3, Width = 82 });
+            _txtCompany = new TextBox { Left = 96, Top = y, Width = 225, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            _txtCompany.TextChanged += (s, e) =>
+            {
+                if (_isSyncingUi) return;
+                _companyName = _txtCompany.Text;
+                SchedulePreviewRefresh();
+            };
+            grpInfo.Controls.Add(_txtCompany);
+
+            y += 32;
+            grpInfo.Controls.Add(new Label { Text = "Điều kiện lọc:", Left = 10, Top = y + 3, Width = 82 });
+            _txtFilter = new TextBox { Left = 96, Top = y, Width = 225, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            _txtFilter.TextChanged += (s, e) =>
+            {
+                if (_isSyncingUi) return;
+                _filterCondition = _txtFilter.Text;
+                SchedulePreviewRefresh();
+            };
+            grpInfo.Controls.Add(_txtFilter);
+
+            y += 32;
+            grpInfo.Controls.Add(new Label { Text = "Người ký:", Left = 10, Top = y + 3, Width = 82 });
+            _txtSigner = new TextBox { Left = 96, Top = y, Width = 225, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            _txtSigner.TextChanged += (s, e) =>
+            {
+                if (_isSyncingUi) return;
+                _signerTitle = _txtSigner.Text;
+                SchedulePreviewRefresh();
+            };
+            grpInfo.Controls.Add(_txtSigner);
+
+            y += 32;
+            grpInfo.Controls.Add(new Label { Text = "Chân trang:", Left = 10, Top = y + 3, Width = 82 });
+            _txtFooter = new TextBox { Left = 96, Top = y, Width = 225, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            _txtFooter.TextChanged += (s, e) =>
+            {
+                if (_isSyncingUi) return;
+                _pageFooter = _txtFooter.Text;
+                SchedulePreviewRefresh();
+            };
+            grpInfo.Controls.Add(_txtFooter);
+
+            var grpPage = new GroupBox
+            {
+                Text = "Khổ giấy & Tùy chọn hiển thị",
+                Dock = DockStyle.Top,
+                Height = 140,
+                Padding = new Padding(10, 8, 10, 8)
+            };
+
+            grpPage.Controls.Add(new Label { Text = "Khổ giấy:", Left = 10, Top = 29, Width = 68 });
+            _cboPaperOrientation = new ComboBox { Left = 82, Top = 26, Width = 112, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cboPaperOrientation.Items.AddRange(new object[] { "A4 Dọc", "A4 Ngang" });
+            _cboPaperOrientation.SelectedIndex = 0;
+            _cboPaperOrientation.SelectedIndexChanged += (s, e) =>
+            {
+                if (_isSyncingUi) return;
+                _landscape = _cboPaperOrientation.SelectedIndex == 1;
+                RebuildHtml(immediate: true);
+            };
+            grpPage.Controls.Add(_cboPaperOrientation);
+
+            grpPage.Controls.Add(new Label { Text = "Cỡ chữ:", Left = 204, Top = 29, Width = 52 });
+            _nudFontSize = new NumericUpDown
+            {
+                Left = 260,
+                Top = 26,
+                Width = 60,
+                Minimum = 9,
+                Maximum = 22,
+                Value = 13
+            };
+            _nudFontSize.ValueChanged += (s, e) =>
+            {
+                if (_isSyncingUi) return;
+                _fontSizePt = (int)_nudFontSize.Value;
+                SchedulePreviewRefresh();
+            };
+            grpPage.Controls.Add(_nudFontSize);
+
+            _chkShowStt = new CheckBox { Text = "Hiển thị cột số thứ tự (STT)", Left = 12, Top = 64, Width = 290, Checked = true };
+            _chkShowStt.CheckedChanged += (s, e) =>
+            {
+                if (_isSyncingUi) return;
+                _showStt = _chkShowStt.Checked;
+                RebuildHtml(immediate: true);
+            };
+
+            _chkGroupTotals = new CheckBox { Text = "Hiển thị dòng tổng phụ ở cuối mỗi nhóm", Left = 12, Top = 92, Width = 295 };
+            _chkGroupTotals.CheckedChanged += (s, e) =>
+            {
+                if (_isSyncingUi) return;
+                _showGroupTotals = _chkGroupTotals.Checked;
+                RebuildHtml(immediate: true);
+            };
+            grpPage.Controls.AddRange(new Control[] { _chkShowStt, _chkGroupTotals });
+
+            host.Controls.Add(grpPage);
+            host.Controls.Add(grpInfo);
         }
 
         private ListBox CreateColumnListBox(bool isVisibleList)
@@ -1720,12 +2165,12 @@ namespace ExamHelper.Utilities
                 _currentHtml = "<!DOCTYPE html><html><head><meta charset='utf-8'></head>" +
                     "<body style=\"font-family:'Segoe UI',sans-serif;padding:40px;text-align:center;color:#475569;\">" +
                     "<h3>Chưa chọn cột hiển thị</h3>" +
-                    "<p>Hãy kéo thả cột từ khung <b>Ẩn</b> sang khung <b>Hiện</b> ở bên trái để xem báo cáo.</p>" +
+                    "<p>Hãy kéo thả cột từ khung <b>Ẩn</b> sang khung <b>Hiện</b> (hoặc bấm <b>+ Hiện cột</b>) để xem báo cáo.</p>" +
                     "</body></html>";
             }
             else
             {
-                _currentHtml = ReportHelper.GenerateHtml(
+                _currentHtml = ReportHelper.GenerateHtmlCore(
                     table: _sourceTable,
                     reportTitle: _reportTitle,
                     filterCondition: _filterCondition,
@@ -1739,7 +2184,8 @@ namespace ExamHelper.Utilities
                     dateFormat: _dateFormat,
                     showStt: _showStt,
                     landscape: _landscape,
-                    fontSizePt: _fontSizePt);
+                    fontSizePt: _fontSizePt,
+                    interactivePreview: false);
             }
 
             if (immediate)
@@ -1774,12 +2220,46 @@ namespace ExamHelper.Utilities
                 Dock = DockStyle.Fill,
                 IsWebBrowserContextMenuEnabled = true
             };
+
+            if (_isDynamicMode)
+            {
+                try
+                {
+                    _webViewer.ObjectForScripting = new ReportPreviewBridge(this);
+                }
+                catch
+                {
+                    // Bỏ qua nếu môi trường giới hạn ActiveX scripting; thanh chip và tab thiết kế vẫn hoạt động đầy đủ.
+                }
+            }
+
             _previewHost.Controls.Add(_webViewer);
         }
 
         private void RenderCurrentHtmlToBrowser()
         {
-            if (_webViewer != null)
+            if (_webViewer == null) return;
+
+            if (_isDynamicMode && _visibleColumns.Count > 0)
+            {
+                _webViewer.DocumentText = ReportHelper.GenerateHtmlCore(
+                    table: _sourceTable,
+                    reportTitle: _reportTitle,
+                    filterCondition: _filterCondition,
+                    groupByColumn: _groupByColumn,
+                    groupPrefix: _groupPrefix,
+                    columns: _visibleColumns,
+                    companyName: _companyName,
+                    signerTitle: _signerTitle,
+                    showGroupTotals: _showGroupTotals,
+                    pageFooter: _pageFooter,
+                    dateFormat: _dateFormat,
+                    showStt: _showStt,
+                    landscape: _landscape,
+                    fontSizePt: _fontSizePt,
+                    interactivePreview: true);
+            }
+            else
             {
                 _webViewer.DocumentText = _currentHtml ?? "";
             }
@@ -1795,6 +2275,8 @@ namespace ExamHelper.Utilities
                 _debounceTimer = null;
                 _hiddenColumnsMenu?.Dispose();
                 _hiddenColumnsMenu = null;
+                _columnActionMenu?.Dispose();
+                _columnActionMenu = null;
                 _boldFont?.Dispose();
                 _boldFont = null;
             }

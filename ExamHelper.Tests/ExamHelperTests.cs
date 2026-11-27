@@ -7,6 +7,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Windows.Forms;
+using System.Xml.Linq;
 using ExamHelper.Binding;
 using ExamHelper.Database;
 using ExamHelper.Utilities;
@@ -1825,6 +1826,183 @@ namespace ExamHelper.Tests
             Assert.Contains("size: A4 landscape", htmlAfterFormEdit);
             Assert.Contains("font-size: 15px;", htmlAfterFormEdit);
             Assert.Contains("TB: 2,000", htmlAfterFormEdit);
+        }
+
+        [Fact]
+        public void ReportTemplate_SaveLoadAndApply_PreservesOrderHiddenColumnsAndFormatting()
+        {
+            var dt = new DataTable();
+            dt.Columns.Add("MaNV", typeof(string));
+            dt.Columns.Add("HoTen", typeof(string));
+            dt.Columns.Add("TenPB", typeof(string));
+            dt.Columns.Add("Luong", typeof(decimal));
+            dt.Rows.Add("NV01", "Nguyễn An", "Kinh doanh", 12000000m);
+
+            string tempPath = Path.Combine(Path.GetTempPath(), "examhelper_tpl_" + Guid.NewGuid().ToString("N") + ".examrpt");
+            try
+            {
+                using (var viewer = new FormReportViewer(dt, new ReportDesignOptions { ReportTitle = "BẢNG LƯƠNG CŨ", OpenDesigner = false }))
+                {
+                    viewer.ReportTitle = "BẢNG LƯƠNG ĐÃ LƯU";
+                    viewer.ReportCompanyName = "CÔNG TY MẪU";
+                    viewer.Landscape = true;
+                    viewer.FontSizePt = 15;
+                    viewer.SetGroupByColumn("TenPB");
+                    viewer.HideColumn("MaNV");
+                    var colLuong = viewer.VisibleColumns.First(c => c.ColumnName == "Luong");
+                    colLuong.HeaderText = "Thực lãnh";
+                    colLuong.SummaryMode = ReportSummaryMode.Sum;
+                    viewer.MoveVisibleColumn("Luong", 0);
+
+                    Assert.True(viewer.SaveTemplateFile(tempPath));
+                }
+
+                Assert.True(File.Exists(tempPath));
+                var loaded = ReportHelper.LoadTemplate(tempPath);
+                Assert.Equal("BẢNG LƯƠNG ĐÃ LƯU", loaded.ReportTitle);
+                Assert.True(loaded.Landscape);
+                Assert.Equal(15, loaded.FontSizePt);
+                Assert.Equal("TenPB", loaded.GroupByColumn);
+
+                // Dữ liệu mới có thêm 1 cột chưa có trong template
+                var dtNew = dt.Copy();
+                dtNew.Columns.Add("GhiChu", typeof(string));
+
+                using (var reopened = new FormReportViewer(dtNew, loaded.ToDesignOptions(dtNew, "Phòng: Tất cả", openDesigner: false)))
+                {
+                    Assert.Equal("Phòng: Tất cả", reopened.FilterCondition);
+                    Assert.Equal("BẢNG LƯƠNG ĐÃ LƯU", reopened.ReportTitle);
+                    Assert.True(reopened.Landscape);
+                    Assert.Equal(15, reopened.FontSizePt);
+                    Assert.Equal("Luong", reopened.VisibleColumns[0].ColumnName);
+                    Assert.Equal("Thực lãnh", reopened.VisibleColumns[0].HeaderText);
+                    Assert.Equal(ReportSummaryMode.Sum, reopened.VisibleColumns[0].SummaryMode);
+                    Assert.Contains(reopened.HiddenColumns, c => c.ColumnName == "MaNV");
+                    Assert.Contains(reopened.HiddenColumns, c => c.ColumnName == "GhiChu");
+                }
+            }
+            finally
+            {
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+            }
+        }
+
+        [Fact]
+        public void ReportHelper_GenerateRdlcXml_ProducesValidRdl2008SchemaWithGroupingAndSummaries()
+        {
+            var dt = new DataTable("NhanVien");
+            dt.Columns.Add("MaNV", typeof(string));
+            dt.Columns.Add("Họ tên", typeof(string)); // Kiểm tra chuẩn hóa tên Field CLS
+            dt.Columns.Add("TenPB", typeof(string));
+            dt.Columns.Add("Luong", typeof(decimal));
+            dt.Rows.Add("NV01", "Trần Bình", "Kỹ thuật", 15000000m);
+
+            var cols = new[]
+            {
+                new ReportColumn("MaNV", "Mã NV", HorizontalAlignment.Center),
+                new ReportColumn("Họ tên", "Họ và tên"),
+                new ReportColumn("Luong", "Mức lương", "N0", HorizontalAlignment.Right, ReportSummaryMode.Sum)
+            };
+
+            string xml = ReportHelper.GenerateRdlcXml(
+                dt, "BẢNG LƯƠNG THỬ NGHIỆM", "Phòng: Tất cả",
+                groupByColumn: "TenPB", groupPrefix: "Phòng: ",
+                columns: cols, companyName: "ĐƠN VỊ TEST",
+                showGroupTotals: true, landscape: true, dataSetName: "dsNhanVien");
+
+            XDocument doc = XDocument.Parse(xml);
+            XNamespace ns = "http://schemas.microsoft.com/sqlserver/reporting/2008/01/reportdefinition";
+
+            Assert.Equal("29.7cm", doc.Descendants(ns + "PageWidth").Single().Value);
+            Assert.Equal("21cm", doc.Descendants(ns + "PageHeight").Single().Value);
+            Assert.Equal("dsNhanVien", doc.Descendants(ns + "DataSet").Single().Attribute("Name")?.Value);
+
+            var hoTenField = doc.Descendants(ns + "Field").First(f => f.Element(ns + "DataField")?.Value == "Họ tên");
+            string hoTenCls = hoTenField.Attribute("Name")?.Value;
+            Assert.DoesNotContain(" ", hoTenCls);
+
+            Assert.Contains("=Fields!TenPB.Value", doc.Descendants(ns + "GroupExpression").Select(x => x.Value));
+            Assert.Contains("=Sum(Fields!Luong.Value)", xml);
+            Assert.Contains("=RowNumber(Nothing)", xml);
+            Assert.Contains("#,##0", xml);
+
+            // Kiểm tra tên Textbox duy nhất toàn tài liệu và khớp số hàng/cột Tablix
+            var tbNames = doc.Descendants(ns + "Textbox").Select(t => t.Attribute("Name")?.Value).ToList();
+            Assert.Equal(tbNames.Count, tbNames.Distinct(StringComparer.Ordinal).Count());
+
+            var tablix = doc.Descendants(ns + "Tablix").Single();
+            int tablixRowsCount = tablix.Element(ns + "TablixBody").Element(ns + "TablixRows").Elements(ns + "TablixRow").Count();
+            int leafRowMembers = tablix.Element(ns + "TablixRowHierarchy")
+                .Descendants(ns + "TablixMember")
+                .Count(m => m.Element(ns + "TablixMembers") == null);
+            Assert.Equal(tablixRowsCount, leafRowMembers);
+
+            int tablixColsCount = tablix.Element(ns + "TablixBody").Element(ns + "TablixColumns").Elements(ns + "TablixColumn").Count();
+            int colMembers = tablix.Element(ns + "TablixColumnHierarchy").Element(ns + "TablixMembers").Elements(ns + "TablixMember").Count();
+            Assert.Equal(tablixColsCount, colMembers);
+
+            string tempRdlc = Path.Combine(Path.GetTempPath(), "examhelper_test_" + Guid.NewGuid().ToString("N") + ".rdlc");
+            try
+            {
+                Assert.True(ReportHelper.ExportRdlcFile(dt, "BẢNG LƯƠNG", columns: cols, filePath: tempRdlc));
+                Assert.True(File.Exists(tempRdlc));
+                Assert.Contains("tblReportData", File.ReadAllText(tempRdlc));
+            }
+            finally
+            {
+                if (File.Exists(tempRdlc)) File.Delete(tempRdlc);
+            }
+        }
+
+        [Fact]
+        public void FormReportViewer_InteractivePreview_KeepsCurrentHtmlClean_And_AttachesScriptingBridge()
+        {
+            var dt = CreateSampleDataTable();
+            string plainHtml = ReportHelper.GenerateHtml(dt, "TĨNH");
+            string interactiveHtml = ReportHelper.GenerateHtmlCore(dt, "TƯƠNG TÁC", null, null, null, null,
+                "ĐƠN VỊ", "Người ký", false, "Trang 1/1", "dd/MM/yyyy", true, false, 13, interactivePreview: true);
+
+            Assert.DoesNotContain("notifyHost", plainHtml);
+            Assert.Contains("data-edit='title'", interactiveHtml);
+            Assert.Contains("data-col='MaNV'", interactiveHtml);
+            Assert.Contains("notifyHost('col:MaNV')", interactiveHtml);
+
+            Exception capturedEx = null;
+            object scriptingBridge = null;
+            string currentHtmlSnapshot = null;
+            int tabCount = 0;
+
+            var sta = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                    using (var viewer = new FormReportViewer(dt, new ReportDesignOptions { ReportTitle = "BÁO CÁO MỚI", OpenDesigner = true }))
+                    using (var timer = new System.Windows.Forms.Timer { Interval = 120 })
+                    {
+                        timer.Tick += (s, e) =>
+                        {
+                            timer.Stop();
+                            var web = (WebBrowser)typeof(FormReportViewer).GetField("_webViewer", flags).GetValue(viewer);
+                            var tabs = (TabControl)typeof(FormReportViewer).GetField("_designerTabs", flags).GetValue(viewer);
+                            scriptingBridge = web?.ObjectForScripting;
+                            tabCount = tabs?.TabPages.Count ?? 0;
+                            currentHtmlSnapshot = viewer.CurrentHtml;
+                            viewer.Close();
+                        };
+                        viewer.Shown += (s, e) => timer.Start();
+                        Application.Run(viewer);
+                    }
+                }
+                catch (Exception ex) { capturedEx = ex; }
+            });
+            sta.SetApartmentState(System.Threading.ApartmentState.STA);
+            sta.Start();
+            Assert.True(sta.Join(10000));
+            Assert.Null(capturedEx);
+            Assert.Equal(2, tabCount);
+            Assert.IsType<ReportPreviewBridge>(scriptingBridge);
+            Assert.DoesNotContain("notifyHost", currentHtmlSnapshot);
         }
 
         #endregion

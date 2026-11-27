@@ -448,8 +448,8 @@ private void CapNhatThongKe(DataTable dt)
 ## 10. `ReportHelper` - Form Báo Cáo dùng chung & Hỗ trợ RDLC (In, PDF, Excel)
 
 > **Nhiệm vụ:** Hoàn thành câu hỏi Báo cáo (2.5 điểm) nhanh nhất có thể! Bạn có 2 lựa chọn tùy theo yêu cầu giám khảo:
-> - **Lựa chọn A (Siêu tốc - Tự gom bảng & Kéo thả trực tiếp):** Gọi `ReportHelper.ShowReport(_dtKetQua)` hoặc `ReportHelper.ShowReport(dgvKetQua, "TIÊU ĐỀ", owner: this)` để tự gom **toàn bộ trường dữ liệu** vào 1 bảng chuẩn A4; người dùng có thể **kéo-thả ẩn/hiện/đổi thứ tự/gom nhóm cột, sửa tiêu đề, đổi tên cột** ngay trên Form xem trước rồi nhấn **In / Lưu PDF**, **Xem trước** hoặc **Xuất Excel**.
-> - **Lựa chọn B (Nếu đề bắt buộc dùng RDLC `ReportViewer`):** Gọi `ReportHelper.PrepareReportTable(...)`, `ReportHelper.BindRdlc(...)` và `ReportHelper.ExportRdlc(...)` để nạp DataSet, truyền Parameter và xuất PDF/Excel trực tiếp qua `SaveFileDialog`.
+> - **Lựa chọn A (Siêu tốc - Kéo thả, bấm sửa trực tiếp & Lưu mẫu):** Gọi `ReportHelper.ShowReport(_dtKetQua)` (hoặc `ReportHelper.ShowReportFromTemplate(...)`) để tự gom **toàn bộ trường dữ liệu** vào 1 bảng chuẩn A4; bấm thẳng vào **Tiêu đề / Đơn vị / Tiêu đề cột** trên trang xem trước hoặc kéo-thả chip để ẩn/hiện/sắp xếp/gom nhóm, **Lưu mẫu (`.examrpt`)** dùng lại, **Xuất `.rdlc`**, **Xuất Excel (`.xlsx`)** hoặc **In / Lưu PDF**.
+> - **Lựa chọn B (Nếu đề bắt buộc dùng RDLC `ReportViewer`):** Có thể bấm **Xuất .rdlc** ngay từ màn hình kéo-thả (hoặc gọi `ReportHelper.ExportRdlcFile(...)`) để tạo sẵn khung `.rdlc`, rồi gọi `ReportHelper.BindRdlc(...)` và `ReportHelper.ExportRdlc(...)` để nạp DataSet, truyền Parameter và xuất PDF/Excel.
 
 ### 10.1 Cách 1: Gọi siêu tốc 1 dòng code (Tự gom toàn bộ cột + Kéo thả chỉnh trực tiếp)
 Nếu không muốn khai báo cứng cấu trúc cột trong code, chỉ cần truyền thẳng `DataTable` hoặc `DataGridView`:

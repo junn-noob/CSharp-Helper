@@ -2,6 +2,15 @@
 
 Tài liệu ghi nhận các thay đổi chính của package **ExamHelper** (`PackageId: ExamHelper`).
 
+## [1.2.0] - 2026-11-28
+### Added
+- `ReportTemplate` & `ReportTemplateColumn` (`.examrpt` XML): lưu toàn bộ bố cục báo cáo (tiêu đề, đơn vị, nhóm, thứ tự cột hiện/ẩn, căn lề, định dạng, `ReportSummaryMode`, khổ A4, cỡ chữ) ra file và nạp lại qua `ReportHelper.LoadTemplate` / `ShowReportFromTemplate`.
+- `RdlcGenerator`, `ReportHelper.GenerateRdlcXml` và `ReportHelper.ExportRdlcFile`: xuất trực tiếp file thiết kế Microsoft Report (`.rdlc` RDL 2008) từ chính bố cục kéo-thả, mở được trong Visual Studio Report Designer và chạy qua `ReportHelper.BindRdlc`.
+- `ReportPreviewBridge` (`WebBrowser.ObjectForScripting`) cho phép bấm trực tiếp vào Đơn vị, Tiêu đề, Điều kiện lọc, Người ký hoặc tiêu đề từng cột ngay trên mặt giấy xem trước A4 để đổi tên, căn lề, định dạng, chọn thống kê, gom nhóm hoặc ẩn cột tại chỗ.
+
+### Changed
+- Tinh gọn bảng điều khiển trái của `FormReportViewer` thành 2 tab rõ ràng (`Cột & Nhóm`, `Tiêu đề & Trang`), đồng bộ menu ngữ cảnh trên từng chip cột và thanh công cụ `FlowLayoutPanel` gồm thêm `Xuất .rdlc`, `Lưu mẫu`, `Mở mẫu`.
+
 ## [1.1.0] - 2026-11-28
 ### Added
 - Hỗ trợ đa hệ CSDL qua `DbDialect` (`SqlServer`, `Sqlite`, `MySql`, `PostgreSql`, `OleDb`, `Odbc`), tự động chuyển `@param` sang `?` cho `OleDb`/`Odbc` và fallback đọc `DbDataReader` khi `CreateDataAdapter() == null`.

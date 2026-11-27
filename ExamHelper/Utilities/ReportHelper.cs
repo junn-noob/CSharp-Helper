@@ -210,6 +210,17 @@ namespace ExamHelper.Utilities
             bool showGroupTotals = false, string pageFooter = "Trang 1/1", string dateFormat = "dd/MM/yyyy",
             bool showStt = true, bool landscape = false, int fontSizePt = 13)
         {
+            return GenerateHtmlCore(table, reportTitle, filterCondition, groupByColumn, groupPrefix, columns,
+                companyName, signerTitle, showGroupTotals, pageFooter, dateFormat, showStt, landscape, fontSizePt,
+                interactivePreview: false);
+        }
+
+        internal static string GenerateHtmlCore(DataTable table, string reportTitle, string filterCondition,
+            string groupByColumn, string groupPrefix, IEnumerable<ReportColumn> columns,
+            string companyName, string signerTitle,
+            bool showGroupTotals, string pageFooter, string dateFormat,
+            bool showStt, bool landscape, int fontSizePt, bool interactivePreview)
+        {
             if (table == null) table = new DataTable();
 
             var colList = columns?.ToList();
@@ -233,25 +244,50 @@ namespace ExamHelper.Utilities
                 .subtotal { font-style: italic; background-color: #fafbfc; font-weight: bold; }
                 .tong { font-weight: bold; background-color: #fde9d9; font-size: " + bodyPx + @"px; }
                 .c { text-align: center; } .r { text-align: right; } .l { text-align: left; }
-                .footer { text-align: center; font-style: italic; margin-top: 30px; font-size: " + Math.Max(9, cellPx - 1) + @"px; color: #444; }
+                .footer { text-align: center; font-style: italic; margin-top: 30px; font-size: " + Math.Max(9, cellPx - 1) + @"px; color: #444; }");
+
+            if (interactivePreview)
+            {
+                sb.Append(@"
+                .preview-tip { font-family: 'Segoe UI', sans-serif; font-size: 12px; color: #1e40af; background: #eff6ff; border: 1px solid #bfdbfe; padding: 5px 10px; margin-bottom: 12px; border-radius: 4px; text-align: center; }
+                [data-edit], th[data-col] { cursor: pointer; }
+                [data-edit]:hover, th[data-col]:hover { outline: 2px dashed #2563eb; background-color: #eff6ff !important; }");
+            }
+
+            sb.Append(@"
                 @media print {
                     body { margin: 12mm; }
                     .no-print { display: none; }
+                    [data-edit]:hover, th[data-col]:hover { outline: none !important; background-color: inherit !important; }
                 }
             </style></head><body>");
 
+            if (interactivePreview)
+            {
+                sb.Append("<div class='preview-tip no-print'>Mẹo: Bấm trực tiếp vào <b>Đơn vị</b>, <b>Tiêu đề</b>, <b>Điều kiện lọc</b>, <b>Người ký</b> hoặc <b>tiêu đề cột</b> trên bảng để sửa nhanh.</div>");
+            }
+
             // Phần đầu biểu mẫu
             string safeDateFmt = string.IsNullOrWhiteSpace(dateFormat) ? "dd/MM/yyyy" : dateFormat;
+            string companyAttr = interactivePreview ? " data-edit='company' onclick=\"notifyHost('company')\" title='Bấm để sửa tên đơn vị'" : "";
+            string titleAttr = interactivePreview ? " data-edit='title' onclick=\"notifyHost('title')\" title='Bấm để sửa tiêu đề báo cáo'" : "";
+            string filterAttr = interactivePreview ? " data-edit='filter' onclick=\"notifyHost('filter')\" title='Bấm để sửa điều kiện lọc'" : "";
+            string signerAttr = interactivePreview ? " data-edit='signer' onclick=\"notifyHost('signer')\" title='Bấm để sửa chức danh người ký'" : "";
+
             sb.Append("<table><tr>");
-            sb.Append("<td style='border:none;font-weight:bold;text-transform:uppercase;'>" + EscapeHtml(companyName) + "</td>");
+            sb.Append("<td" + companyAttr + " style='border:none;font-weight:bold;text-transform:uppercase;'>" + EscapeHtml(companyName) + "</td>");
             sb.Append("<td style='border:none;text-align:right;font-style:italic;'>Ngày lập: " + DateTime.Now.ToString(safeDateFmt) + "</td>");
             sb.Append("</tr></table>");
 
-            sb.Append("<h2 style='text-align:center;margin:15px 0 5px;color:#1f497d;text-transform:uppercase;'>" + EscapeHtml(reportTitle) + "</h2>");
+            sb.Append("<h2" + titleAttr + " style='text-align:center;margin:15px 0 5px;color:#1f497d;text-transform:uppercase;'>" + EscapeHtml(reportTitle) + "</h2>");
 
             if (!string.IsNullOrWhiteSpace(filterCondition))
             {
-                sb.Append("<p style='text-align:center;font-style:italic;margin:2px 0 15px;color:#555;'>Điều kiện lọc: " + EscapeHtml(filterCondition) + "</p>");
+                sb.Append("<p" + filterAttr + " style='text-align:center;font-style:italic;margin:2px 0 15px;color:#555;'>Điều kiện lọc: " + EscapeHtml(filterCondition) + "</p>");
+            }
+            else if (interactivePreview)
+            {
+                sb.Append("<p class='no-print'" + filterAttr + " style='text-align:center;font-style:italic;margin:2px 0 15px;color:#94a3b8;'>(+ Bấm để nhập điều kiện lọc)</p>");
             }
 
             // Bắt đầu bảng dữ liệu
@@ -259,7 +295,16 @@ namespace ExamHelper.Utilities
             if (showStt) sb.Append("<th style='width:45px;'>STT</th>");
             foreach (var col in colList)
             {
-                sb.Append("<th>" + EscapeHtml(col.HeaderText) + "</th>");
+                if (interactivePreview)
+                {
+                    string safeColAttr = EscapeHtml(col.ColumnName);
+                    string jsArg = EscapeJsString("col:" + col.ColumnName);
+                    sb.Append($"<th data-col='{safeColAttr}' onclick=\"notifyHost('{jsArg}')\" title='Bấm để sửa/căn lề/định dạng/tính tổng hoặc ẩn cột'>{EscapeHtml(col.HeaderText)}</th>");
+                }
+                else
+                {
+                    sb.Append("<th>" + EscapeHtml(col.HeaderText) + "</th>");
+                }
             }
             sb.Append("</tr></thead><tbody>");
 
@@ -317,7 +362,7 @@ namespace ExamHelper.Utilities
             // Chữ ký Người lập biểu
             if (!string.IsNullOrWhiteSpace(signerTitle))
             {
-                sb.Append("<table style='margin-top:35px;'><tr><td style='border:none;'></td><td style='border:none;text-align:right;padding-right:45px;'><b>" + EscapeHtml(signerTitle) + "</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br></td></tr></table>");
+                sb.Append("<table style='margin-top:35px;'><tr><td style='border:none;'></td><td" + signerAttr + " style='border:none;text-align:right;padding-right:45px;'><b>" + EscapeHtml(signerTitle) + "</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br></td></tr></table>");
             }
 
             // Chân trang số trang
@@ -326,9 +371,24 @@ namespace ExamHelper.Utilities
                 sb.Append($"<div class='footer'>{EscapeHtml(pageFooter)}</div>");
             }
 
+            if (interactivePreview)
+            {
+                sb.Append("<script type='text/javascript'>function notifyHost(act){try{if(window.external&&window.external.OnPreviewClick){window.external.OnPreviewClick(act);}}catch(e){}}</script>");
+            }
+
             sb.Append("</body></html>");
 
             return sb.ToString();
+        }
+
+        private static string EscapeJsString(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value
+                .Replace("\\", "\\\\")
+                .Replace("'", "\\'")
+                .Replace("\r", "")
+                .Replace("\n", "");
         }
 
         internal static List<ReportColumn> BuildAutoColumns(DataTable table, string groupByColumn, string sumColumn)
@@ -693,6 +753,14 @@ namespace ExamHelper.Utilities
                 FontSizePt = fontSizePt
             };
 
+            ShowReport(dataTable, options, owner);
+        }
+
+        /// <summary>
+        /// Mở Form Báo Cáo trực quan bằng cấu hình <see cref="ReportDesignOptions"/> (hoặc tạo từ <see cref="ReportTemplate"/>).
+        /// </summary>
+        public static void ShowReport(DataTable dataTable, ReportDesignOptions options, IWin32Window owner = null)
+        {
             using (var form = new FormReportViewer(dataTable, options))
             {
                 if (owner != null) form.ShowDialog(owner);
@@ -1162,6 +1230,108 @@ namespace ExamHelper.Utilities
                     MessageHelper.Error("Lỗi khi xuất Crystal Report: " + (ex.InnerException?.Message ?? ex.Message));
                     return false;
                 }
+            }
+        }
+
+        #endregion
+
+        #region Hỗ trợ File mẫu (.examrpt) & Xuất file thiết kế .rdlc
+
+        /// <summary>Lưu đối tượng <see cref="ReportTemplate"/> thành file mẫu XML (.examrpt).</summary>
+        public static void SaveTemplate(ReportTemplate template, string filePath)
+        {
+            if (template == null) throw new ArgumentNullException(nameof(template));
+            template.Save(filePath);
+        }
+
+        /// <summary>Đọc file mẫu báo cáo (.examrpt / .xml) từ đĩa.</summary>
+        public static ReportTemplate LoadTemplate(string filePath) => ReportTemplate.Load(filePath);
+
+        /// <summary>
+        /// Mở Form báo cáo trực tiếp từ file mẫu (.examrpt) đã thiết kế sẵn và đổ dữ liệu từ <paramref name="dataTable"/>.
+        /// </summary>
+        public static void ShowReportFromTemplate(DataTable dataTable, string templatePath,
+            string overrideFilterCondition = null, IWin32Window owner = null, bool openDesigner = false)
+        {
+            ReportTemplate template = ReportTemplate.Load(templatePath);
+            ReportDesignOptions options = template.ToDesignOptions(dataTable, overrideFilterCondition, openDesigner);
+            ShowReport(dataTable, options, owner);
+        }
+
+        /// <summary>
+        /// Mở Form báo cáo trực tiếp từ file mẫu (.examrpt) đã thiết kế sẵn và đổ dữ liệu lấy từ <paramref name="grid"/>.
+        /// </summary>
+        public static void ShowReportFromTemplate(DataGridView grid, string templatePath,
+            string overrideFilterCondition = null, IWin32Window owner = null, bool openDesigner = false)
+        {
+            if (grid == null) throw new ArgumentNullException(nameof(grid));
+            DataTable dt = ExtractTable(grid, out _);
+            ShowReportFromTemplate(dt, templatePath, overrideFilterCondition, owner, openDesigner);
+        }
+
+        /// <summary>
+        /// Sinh chuỗi XML file thiết kế Microsoft RDLC (.rdlc) từ DataTable và cấu hình cột trực quan.
+        /// </summary>
+        public static string GenerateRdlcXml(DataTable table, string reportTitle = "BÁO CÁO THỐNG KÊ",
+            string filterCondition = null, string groupByColumn = null, string groupPrefix = null,
+            IEnumerable<ReportColumn> columns = null, string companyName = "ĐƠN VỊ QUẢN LÝ",
+            string signerTitle = "Người lập biểu", bool showGroupTotals = false, string pageFooter = "Trang 1/1",
+            string dateFormat = "dd/MM/yyyy", bool showStt = true, bool landscape = false, int fontSizePt = 13,
+            string dataSetName = "dsBaoCao")
+        {
+            return RdlcGenerator.GenerateXml(table, reportTitle, filterCondition, groupByColumn, groupPrefix,
+                columns, companyName, signerTitle, showGroupTotals, pageFooter, dateFormat, showStt,
+                landscape, fontSizePt, dataSetName);
+        }
+
+        /// <summary>
+        /// Sinh và lưu ra file .rdlc chuẩn (nếu <paramref name="filePath"/> là null sẽ mở SaveFileDialog).
+        /// </summary>
+        public static bool ExportRdlcFile(DataTable table, string reportTitle = "BÁO CÁO THỐNG KÊ",
+            string filterCondition = null, string groupByColumn = null, string groupPrefix = null,
+            IEnumerable<ReportColumn> columns = null, string companyName = "ĐƠN VỊ QUẢN LÝ",
+            string signerTitle = "Người lập biểu", bool showGroupTotals = false, string pageFooter = "Trang 1/1",
+            string dateFormat = "dd/MM/yyyy", bool showStt = true, bool landscape = false, int fontSizePt = 13,
+            string dataSetName = "dsBaoCao", string filePath = null)
+        {
+            string xml = GenerateRdlcXml(table, reportTitle, filterCondition, groupByColumn, groupPrefix,
+                columns, companyName, signerTitle, showGroupTotals, pageFooter, dateFormat, showStt,
+                landscape, fontSizePt, dataSetName);
+
+            string targetPath = filePath;
+            if (string.IsNullOrWhiteSpace(targetPath))
+            {
+                string safeName = SanitizeFileName(reportTitle, "BaoCao");
+                if (!safeName.EndsWith(".rdlc", StringComparison.OrdinalIgnoreCase))
+                    safeName += ".rdlc";
+
+                using (var sfd = new SaveFileDialog
+                {
+                    Filter = "RDLC Report File (*.rdlc)|*.rdlc",
+                    FileName = safeName
+                })
+                {
+                    if (sfd.ShowDialog() != DialogResult.OK)
+                        return false;
+                    targetPath = sfd.FileName;
+                }
+            }
+
+            try
+            {
+                string dir = Path.GetDirectoryName(Path.GetFullPath(targetPath));
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                File.WriteAllText(targetPath, xml, new UTF8Encoding(true));
+                if (string.IsNullOrWhiteSpace(filePath))
+                    MessageHelper.Success("xuất file thiết kế .rdlc");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageHelper.Error("Lỗi khi lưu file .rdlc: " + ex.Message);
+                return false;
             }
         }
 
