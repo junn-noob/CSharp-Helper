@@ -1,234 +1,150 @@
-# CẨM NANG ĐI THI WINFORMS - EXAMHELPER CHEATSHEET
+# ⚡ CHEAT SHEET PHÒNG THI — EXAMHELPER PRO
 
-Tập hợp những đoạn code ngắn (Snippets) dùng nhiều nhất trong đề thi, giúp bạn viết code trong 2-3 dòng thay vì 20-30 dòng.
+Bảng snippet rút gọn tối đa để tra cứu nhanh theo từng phần trong bài thi.
 
 ---
 
-## 1. Kết nối CSDL trong `Form_Load`
+## 1. Kết nối CSDL (chọn 1 cách)
 ```csharp
+// Cách A: Đặt <connectionStrings> trong App.config (trên .NET 8/10 bật Copy if newer) -> không cần code kết nối!
+// Cách B: Gán trực tiếp 1 dòng trong Form_Load:
+DbHelper.ConnectionString = @"Server=(localdb)\MSSQLLocalDB;Database=TenDB;Trusted_Connection=True;";
+```
+
+---
+
+## 2. Form 1 — Quản lý chính (CRUD + Validate)
+```csharp
+private DataTable _schema;
+
 private void Form1_Load(object sender, EventArgs e)
 {
-    // 1 dòng duy nhất để cấu hình kết nối
-    DbHelper.SetDefaultConnectionString("Server=.;Database=TenDatabaseCuaDe;Trusted_Connection=True;");
-    
-    LoadComboBox();
+    _schema = DbHelper.GetTableSchema("NhanVien");
+    ComboBoxHelper.Bind(cboPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB");
     LoadData();
-    SetState(false);
 }
-```
 
----
-
-## 2. Nạp ComboBox (Nhập liệu & Tìm kiếm)
-```csharp
-// 1. Combo trên Form nhập liệu (Chỉ có danh sách thực)
-DataTable dtPhong = DbHelper.GetDataTable("SELECT MaPhong, TenPhong FROM PhongBan");
-ComboBoxHelper.Bind(cboPhong, dtPhong, "MaPhong", "TenPhong");
-
-// 2. Combo trên Thanh tìm kiếm (Có thêm lựa chọn '-- Tất cả --' ở dòng đầu)
-ComboBoxHelper.BindWithAll(cboTimPhong, dtPhong, "MaPhong", "TenPhong", "-- Tất cả phòng ban --");
-```
-
----
-
-## 3. Nạp DataGridView có định dạng
-```csharp
-DataTable dt = DbHelper.GetDataTable("SELECT * FROM NhanVien");
-
-// Nạp kèm tiêu đề cột, độ rộng và định dạng ngày/tiền
-GridHelper.Bind(dgvNhanVien, dt,
-    new GridHelper.GridColumn("MaNV", "Mã nhân viên", 90),
-    new GridHelper.GridColumn("HoTen", "Họ và tên", 180),
-    new GridHelper.GridColumn("NgaySinh", "Ngày sinh", 100, "dd/MM/yyyy"),
-    new GridHelper.GridColumn("Luong", "Lương cơ bản", 120, "N0")
-);
-```
-
----
-
-## 4. Click dòng DataGridView đổ lên Form (SelectionChanged)
-```csharp
-private void dgv_SelectionChanged(object sender, EventArgs e)
+private void LoadData()
 {
-    if (_isAdding) return;
-    
-    DataRowView row = GridHelper.GetSelectedRow(dgvNhanVien);
-    if (row != null)
-    {
-        FormMapper.LoadRow(row,
-            FormMapper.Map(txtMaNV, "MaNV"),
-            FormMapper.Map(txtHoTen, "HoTen"),
-            FormMapper.Map(cboPhong, "MaPhong"),
-            FormMapper.Map(dtpNgaySinh, "NgaySinh"),
-            FormMapper.Map(txtLuong, "Luong")
-        );
-    }
+    string sql = @"SELECT nv.MaNV, nv.HoTen, CASE nv.GioiTinh WHEN 1 THEN N'Nam' ELSE N'Nữ' END AS GioiTinhHT,
+                          nv.NgaySinh, pb.TenPB, nv.HeSoLuong, nv.NgayVaoLam,
+                          CAST(ROUND(nv.HeSoLuong * 2340000, 0) AS DECIMAL(18,0)) AS Luong,
+                          nv.GioiTinh, nv.MaPB
+                   FROM NhanVien nv JOIN PhongBan pb ON nv.MaPB = pb.MaPB ORDER BY nv.MaNV";
+    GridHelper.Bind(dgvDanhSach, sql,
+        new GridHelper.GridColumn("MaNV", "Mã NV", 90),
+        new GridHelper.GridColumn("HoTen", "Họ tên", 175),
+        new GridHelper.GridColumn("GioiTinhHT", "Giới tính", 80),
+        new GridHelper.GridColumn("NgaySinh", "Ngày sinh", 100, "dd/MM/yyyy"),
+        new GridHelper.GridColumn("TenPB", "Phòng ban", 130),
+        new GridHelper.GridColumn("HeSoLuong", "Hệ số lương", 95, "0.##", DataGridViewContentAlignment.MiddleRight),
+        new GridHelper.GridColumn("NgayVaoLam", "Ngày vào làm", 105, "dd/MM/yyyy"),
+        new GridHelper.GridColumn("Luong", "Lương", -1, "N0", DataGridViewContentAlignment.MiddleRight));
 }
-```
 
----
+private void dgvDanhSach_SelectionChanged(object sender, EventArgs e)
+{
+    var row = GridHelper.GetSelectedRow(dgvDanhSach);
+    if (row == null) return;
+    FormMapper.AutoLoad(this, row); // Tự nhận Tag="GioiTinh:1/0", ValueMember="MaPB" và tiền tố txt/dtp/cbo
+    txtMaNV.ReadOnly = true;
+}
 
-## 5. Nút Thêm mới
-```csharp
+private bool IsInputValid()
+{
+    var val = Validator.FromSchema(this, _schema,
+        Validator.Pattern(txtMaNV, "Mã NV", @"^NV\d{3}$", "Mã NV phải có dạng NV + 3 chữ số!"),
+        Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m),
+        Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi", 18, 120, "Phải đủ 18 tuổi khi vào làm!"));
+    if (!val.IsValid) { MessageHelper.Warning(val.ErrorMessage); FormHelper.FocusControl(val.ErrorControl); }
+    return val.IsValid;
+}
+
 private void btnThem_Click(object sender, EventArgs e)
 {
-    _isAdding = true;
-    FormMapper.ClearControls(txtMaNV, txtHoTen, txtLuong);
-    SetState(true);
-    FormHelper.FocusControl(txtMaNV);
+    if (!IsInputValid()) return;
+    string ma = txtMaNV.Text.Trim();
+    if (CrudHelper.Exists("NhanVien", "MaNV", ma)) { MessageHelper.DuplicateKey("Mã NV", ma); FormHelper.FocusControl(txtMaNV); return; }
+    if (CrudHelper.Insert("NhanVien", FormMapper.AutoGetValues(this, _schema)) > 0) { MessageHelper.Success("thêm mới"); LoadData(); }
 }
-```
 
----
-
-## 6. Nút Sửa
-```csharp
 private void btnSua_Click(object sender, EventArgs e)
 {
-    if (!GridHelper.HasSelection(dgvNhanVien))
-    {
-        MessageHelper.NoSelection("nhân viên");
-        return;
-    }
-    _isAdding = false;
-    SetState(true);
-    FormHelper.FocusControl(txtHoTen);
+    if (!GridHelper.HasSelection(dgvDanhSach)) { MessageHelper.NoSelection("nhân viên"); return; }
+    if (!IsInputValid()) return;
+    if (CrudHelper.Update("NhanVien", FormMapper.AutoGetValues(this, _schema), "MaNV", txtMaNV.Text.Trim()) > 0)
+    { MessageHelper.Success("cập nhật"); LoadData(); }
 }
-```
 
----
-
-## 7. Nút Xóa có xác nhận
-```csharp
 private void btnXoa_Click(object sender, EventArgs e)
 {
-    if (!GridHelper.HasSelection(dgvNhanVien))
-    {
-        MessageHelper.NoSelection();
-        return;
-    }
-
-    string maNV = txtMaNV.Text.Trim();
-    if (MessageHelper.ConfirmDelete($"nhân viên '{maNV}'"))
-    {
-        if (CrudHelper.Delete("NhanVien", "MaNV", maNV) > 0)
-        {
-            MessageHelper.Success("xóa");
-            LoadData();
-        }
-    }
-}
-```
-
----
-
-## 8. Nút Lưu (Kiểm tra dữ liệu + Thêm / Sửa)
-```csharp
-private void btnLuu_Click(object sender, EventArgs e)
-{
-    // 1. Kiểm tra toàn bộ điều kiện đề bài yêu cầu
-    var val = Validator.ValidateAll(
-        dtpNgayVaoLam.Value, // Truyền ngày tham chiếu nếu đề yêu cầu tính tuổi tại ngày vào làm
-        Validator.Required(txtMaNV, "Mã nhân viên"),
-        Validator.Pattern(txtMaNV, "Mã nhân viên", @"^NV\d{3}$", "Mã phải có định dạng NV001"),
-        Validator.Required(txtHoTen, "Họ tên"),
-        Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 1.0m, 15.0m),
-        Validator.AgeRangeAtDate(dtpNgaySinh, "Tuổi nhân viên", 18, 60, "Phải từ 18-60 tuổi khi vào làm")
-    );
-
-    if (!val.IsValid)
-    {
-        MessageHelper.Warning(val.ErrorMessage);
-        FormHelper.FocusControl(val.ErrorControl);
-        return;
-    }
-
+    if (!GridHelper.HasSelection(dgvDanhSach)) { MessageHelper.NoSelection("nhân viên"); return; }
     string ma = txtMaNV.Text.Trim();
+    if (MessageHelper.ConfirmDelete($"nhân viên {ma}") && CrudHelper.Delete("NhanVien", "MaNV", ma) > 0)
+    { MessageHelper.Success("xóa"); LoadData(); }
+}
 
-    // 2. Gom dữ liệu từ Form thành Dictionary
-    var values = FormMapper.GetValues(
-        FormMapper.Map(txtMaNV, "MaNV"),
-        FormMapper.Map(txtHoTen, "HoTen"),
-        FormMapper.Map(cboPhong, "MaPhong"),
-        FormMapper.Map(dtpNgaySinh, "NgaySinh"),
-        FormMapper.Map(txtHeSoLuong, "HeSoLuong")
-    );
-
-    if (_isAdding)
-    {
-        // Kiểm tra trùng mã khi THÊM
-        if (CrudHelper.Exists("NhanVien", "MaNV", ma))
-        {
-            MessageHelper.DuplicateKey("Mã nhân viên", ma);
-            FormHelper.FocusControl(txtMaNV);
-            return;
-        }
-
-        CrudHelper.Insert("NhanVien", values);
-        MessageHelper.Success("thêm mới");
-    }
-    else
-    {
-        // Khi SỬA: bỏ cột khóa chính ra khỏi set values
-        values.Remove("MaNV");
-        CrudHelper.Update("NhanVien", values, "MaNV", ma);
-        MessageHelper.Success("cập nhật");
-    }
-
-    _isAdding = false;
-    SetState(false);
-    LoadData();
+private void btnLamMoi_Click(object sender, EventArgs e)
+{
+    FormMapper.AutoClear(this);
+    rdoNam.Checked = true;
+    GridHelper.ClearSelection(dgvDanhSach);
+    txtMaNV.ReadOnly = false;
+    txtMaNV.Focus();
 }
 ```
 
 ---
 
-## 9. Tìm kiếm đa điều kiện với `FilterBuilder`
+## 3. Form phụ quản lý nhanh bất kỳ bảng đơn nào (1 dòng)
 ```csharp
-private void btnTimKiem_Click(object sender, EventArgs e)
-{
-    var (where, parms) = FilterBuilder.New()
-        // Bỏ qua nếu chọn '-- Tất cả --' (SelectedIndex = 0)
-        .SkipIfAllSelected(cboTimPhong, "MaPhong")
-        // Bỏ qua nếu để trống ô họ tên
-        .Contains("HoTen", txtTimTen.Text.Trim())
-        .Build();
+FormGenericManager.Open("PhongBan");
+```
 
-    // Nối trực tiếp mệnh đề WHERE an toàn
-    string sql = "SELECT * FROM NhanVien" + where;
-    DataTable dt = DbHelper.GetDataTable(sql, parms);
-    GridHelper.Bind(dgvNhanVien, dt);
+---
+
+## 4. Form 2 — Tìm kiếm đa điều kiện & Thống kê sau lọc
+```csharp
+private void Form2_Load(object sender, EventArgs e)
+{
+    ComboBoxHelper.BindWithAll(cboPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB", "Tất cả");
+    ComboBoxHelper.BindItems(cboGioiTinh, "Tất cả", "Nam", "Nữ");
+    TimKiem(true);
+}
+
+private void TimKiem(bool isInitial)
+{
+    var filter = FilterBuilder.ForConnection().SkipIfAllSelected(cboPhongBan, "nv.MaPB");
+    if (cboGioiTinh.SelectedIndex == 1) filter.Equal("nv.GioiTinh", 1);
+    else if (cboGioiTinh.SelectedIndex == 2) filter.Equal("nv.GioiTinh", 0);
+
+    _dtKetQua = DbHelper.GetDataTable(sqlBase, filter, "pb.TenPB, nv.MaNV");
+    GridHelper.Bind(dgvKetQua, _dtKetQua, /* GridColumn... */);
+
+    lblSoNV.Text = $"Số nhân viên: {DataHelper.Count(_dtKetQua)}";
+    lblTongLuong.Text = $"Tổng lương: {DataHelper.Sum(_dtKetQua, "Luong"):N0}";
+    lblHeSoMax.Text = $"Hệ số cao nhất: {DataHelper.Max<double>(_dtKetQua, "HeSoLuong"):0.##}";
+    if (!isInitial && _dtKetQua.Rows.Count == 0) MessageHelper.Info("Không tìm thấy dữ liệu phù hợp");
 }
 ```
 
 ---
 
-## 10. Thống kê dữ liệu sau lọc
+## 5. Báo cáo & Xuất Excel / PDF
 ```csharp
-private void ThongKe(DataTable dt)
-{
-    lblSoLuong.Text = $"Tổng số: {DataHelper.Count(dt)}";
-    lblTongTien.Text = $"Tổng tiền: {DataHelper.Sum(dt, "Luong"):N0} đ";
-    lblTrungBinh.Text = $"Trung bình: {DataHelper.Average(dt, "Luong"):N0} đ";
-    lblCaoNhat.Text = $"Cao nhất: {DataHelper.Max<decimal>(dt, "Luong"):N0} đ";
-}
-```
+// Cách 1: Mở FormReportViewer dùng chung (kéo-thả cột, gom nhóm, A4 Dọc/Ngang, xuất .xlsx OpenXML thật)
+ReportHelper.ShowReport(_dtKetQua, "BẢNG LƯƠNG NHÂN VIÊN",
+    $"Phòng ban: {cboPhongBan.Text}; Giới tính: {cboGioiTinh.Text}", "TenPB", "Phòng ban: ",
+    new[] {
+        new ReportColumn("MaNV", "Mã NV", HorizontalAlignment.Center),
+        new ReportColumn("HoTen", "Họ tên"),
+        new ReportColumn("NgaySinh", "Ngày sinh", "dd/MM/yyyy", HorizontalAlignment.Center),
+        new ReportColumn("HeSoLuong", "Hệ số lương", "0.##", HorizontalAlignment.Right),
+        new ReportColumn("Luong", "Lương", "N0", HorizontalAlignment.Right, ReportSummaryMode.Sum)
+    }, "CÔNG TY TNHH AN PHÁT", this);
 
----
-
-## 11. Hàm quản lý bật/tắt nút và ô nhập liệu
-```csharp
-private void SetState(bool isEditing)
-{
-    // Bật/tắt các ô nhập
-    FormHelper.EnableControls(isEditing, txtMaNV, txtHoTen, cboPhong, dtpNgaySinh, txtLuong);
-    
-    // Khóa ô Mã khi đang ở chế độ Sửa
-    txtMaNV.ReadOnly = !isEditing || !_isAdding;
-    
-    // Tự động bật Lưu/Hủy khi đang sửa, bật Thêm/Sửa/Xóa khi bình thường
-    FormHelper.ToggleButtons(isEditing, btnThem, btnSua, btnXoa, btnLuu, btnHuy);
-    
-    dgvNhanVien.Enabled = !isEditing;
-}
+// Cách 2: Nếu đề bắt buộc RDLC / Crystal Report
+DataTable dtRpt = ReportHelper.PrepareReportTable(_dtKetQua);
+ReportHelper.BindRdlc(reportViewer1, "dsNhanVien", dtRpt, new Dictionary<string, string> { { "pDieuKienLoc", dieuKien } });
+ReportHelper.ExportRdlc(reportViewer1, "PDF", "BangLuong");
 ```

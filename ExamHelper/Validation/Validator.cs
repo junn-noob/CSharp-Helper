@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.Data;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
+using ExamHelper.Binding;
+using ExamHelper.Utilities;
 
 namespace ExamHelper.Validation
 {
@@ -150,6 +154,18 @@ namespace ExamHelper.Validation
         }
 
         /// <summary>
+        /// Tạo quy tắc kiểm tra ngày không được lớn hơn ngày hiện tại (&lt;= DateTime.Today).
+        /// </summary>
+        /// <param name="ctrl">Control chứa ngày.</param>
+        /// <param name="fieldName">Tên trường hiển thị trong thông báo lỗi.</param>
+        /// <param name="msg">Thông báo lỗi tùy chỉnh (null = tự sinh).</param>
+        public static ValidationRule NotFutureDate(Control ctrl, string fieldName, string msg = null)
+        {
+            return DateRange(ctrl, fieldName, DateTime.MinValue, DateTime.Today,
+                msg ?? $"{fieldName} không được lớn hơn ngày hiện tại");
+        }
+
+        /// <summary>
         /// Tạo quy tắc kiểm tra khoảng tuổi (tính tại ngày hiện tại).
         /// </summary>
         /// <param name="ctrl">Control chứa ngày sinh.</param>
@@ -193,6 +209,52 @@ namespace ExamHelper.Validation
         }
 
         /// <summary>
+        /// Tạo quy tắc kiểm tra khoảng tuổi tính tại ngày của một Control khác (ví dụ: dtpNgayVaoLam).
+        /// Không cần truyền lại referenceDate ở đầu hàm ValidateAll.
+        /// </summary>
+        /// <param name="birthDateControl">Control chứa ngày sinh.</param>
+        /// <param name="referenceDateControl">Control chứa ngày mốc (ví dụ: dtpNgayVaoLam).</param>
+        /// <param name="fieldName">Tên trường hiển thị trong thông báo lỗi.</param>
+        /// <param name="minAge">Tuổi tối thiểu.</param>
+        /// <param name="maxAge">Tuổi tối đa.</param>
+        /// <param name="msg">Thông báo lỗi tùy chỉnh (null = tự sinh).</param>
+        public static ValidationRule AgeRangeAtDate(Control birthDateControl, Control referenceDateControl,
+            string fieldName, int minAge, int maxAge, string msg = null)
+        {
+            return new ValidationRule
+            {
+                Control = birthDateControl,
+                ReferenceControl = referenceDateControl,
+                FieldName = fieldName,
+                Type = ValidationType.AgeRangeAtDate,
+                Param1 = minAge,
+                Param2 = maxAge,
+                CustomMessage = msg
+            };
+        }
+
+        /// <summary>
+        /// Kiểm tra ngày ở Control thứ nhất phải nhỏ hơn hoặc bằng ngày ở Control tham chiếu (ví dụ: Ngày sinh &lt;= Ngày vào làm).
+        /// </summary>
+        public static ValidationRule DateBeforeOrEqual(Control ctrl, Control targetDateControl, string fieldName, string msg = null)
+        {
+            return new ValidationRule
+            {
+                Control = ctrl,
+                ReferenceControl = targetDateControl,
+                FieldName = fieldName,
+                Type = ValidationType.Custom,
+                Param1 = (Func<string, bool>)(_ =>
+                {
+                    if (!TryGetDateValue(ctrl, out DateTime d1) || !TryGetDateValue(targetDateControl, out DateTime d2))
+                        return false;
+                    return d1.Date <= d2.Date;
+                }),
+                CustomMessage = msg ?? $"{fieldName} không hợp lệ"
+            };
+        }
+
+        /// <summary>
         /// Tạo quy tắc kiểm tra tùy chỉnh bằng hàm do người dùng cung cấp.
         /// </summary>
         /// <param name="ctrl">Control cần kiểm tra.</param>
@@ -225,7 +287,7 @@ namespace ExamHelper.Validation
             {
                 if (cmb == null || cmb.SelectedIndex < 0) return false;
                 if (string.IsNullOrWhiteSpace(val)) return false;
-                if (val == "0" && cmb.SelectedIndex == 0) return false;
+                if (cmb.SelectedIndex == 0 && (val == "0" || val == "-1")) return false;
                 return true;
             }, msg ?? $"Vui lòng chọn {fieldName}");
         }
@@ -272,6 +334,69 @@ namespace ExamHelper.Validation
             }
 
             return ValidationResult.Success();
+        }
+
+        /// <summary>
+        /// Tự động kiểm tra toàn bộ control trên Form/container dựa theo cấu trúc bảng CSDL (NOT NULL, MaxLength, kiểu số nguyên/thực),
+        /// sau đó kiểm tra thêm các quy tắc nghiệp vụ riêng (<paramref name="extraRules"/>) nếu có.
+        /// </summary>
+        public static ValidationResult FromSchema(Control container, DataTable schemaTable, params ValidationRule[] extraRules)
+        {
+            if (container != null && schemaTable != null)
+            {
+                var autoRules = new List<ValidationRule>();
+                DataColumnCollection cols = schemaTable.Columns;
+
+                foreach (Control ctrl in FormMapper.EnumerateInputControls(container))
+                {
+                    if (ctrl is RadioButton || ctrl is CheckBox || ctrl is DateTimePicker)
+                        continue;
+
+                    if (!FormMapper.TryResolveField(ctrl, cols, out string colName, out _))
+                        continue;
+                    if (!cols.Contains(colName))
+                        continue;
+
+                    DataColumn dc = cols[colName];
+                    if (dc.AutoIncrement)
+                        continue;
+
+                    string label = !string.IsNullOrWhiteSpace(dc.Caption) && !string.Equals(dc.Caption, dc.ColumnName, StringComparison.Ordinal)
+                        ? dc.Caption
+                        : dc.ColumnName;
+
+                    if (!dc.AllowDBNull)
+                    {
+                        if (ctrl is ComboBox cmb)
+                            autoRules.Add(Selected(cmb, label));
+                        else
+                            autoRules.Add(Required(ctrl, label));
+                    }
+
+                    if (dc.DataType == typeof(string) && dc.MaxLength > 0 && !(ctrl is ComboBox))
+                    {
+                        autoRules.Add(MaxLength(ctrl, label, dc.MaxLength));
+                    }
+                    else if (dc.DataType == typeof(int) || dc.DataType == typeof(short) || dc.DataType == typeof(long))
+                    {
+                        autoRules.Add(Custom(ctrl, label, val =>
+                            string.IsNullOrWhiteSpace(val) || long.TryParse(val.Trim(), out _),
+                            $"{label} phải là số nguyên hợp lệ"));
+                    }
+                    else if (dc.DataType == typeof(decimal) || dc.DataType == typeof(double) || dc.DataType == typeof(float))
+                    {
+                        autoRules.Add(Custom(ctrl, label, val =>
+                            string.IsNullOrWhiteSpace(val) || DataHelper.TryParseDecimal(val, out _),
+                            $"{label} phải là số hợp lệ"));
+                    }
+                }
+
+                var schemaResult = ValidateAll(autoRules.ToArray());
+                if (!schemaResult.IsValid)
+                    return schemaResult;
+            }
+
+            return ValidateAll(extraRules);
         }
 
         #endregion
@@ -384,7 +509,12 @@ namespace ExamHelper.Validation
                     return ValidateAgeRange(rule, DateTime.Today);
 
                 case ValidationType.AgeRangeAtDate:
-                    return ValidateAgeRange(rule, referenceDate);
+                    DateTime effectiveRef = referenceDate;
+                    if (rule.ReferenceControl != null && TryGetDateValue(rule.ReferenceControl, out DateTime ctrlRef))
+                    {
+                        effectiveRef = ctrlRef;
+                    }
+                    return ValidateAgeRange(rule, effectiveRef);
 
                 case ValidationType.Custom:
                     return ValidateCustom(rule, value);
@@ -408,7 +538,8 @@ namespace ExamHelper.Validation
         private static string ValidatePattern(ValidationRule rule, string value)
         {
             string pattern = (string)rule.Param1;
-            if (!string.IsNullOrEmpty(value) && !Regex.IsMatch(value, pattern))
+            string trimmed = value?.Trim();
+            if (!string.IsNullOrEmpty(trimmed) && !Regex.IsMatch(trimmed, pattern))
             {
                 return rule.CustomMessage ?? $"{rule.FieldName} không đúng định dạng";
             }

@@ -1,20 +1,113 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Windows.Forms;
+using ExamHelper.Database;
 
 namespace ExamHelper.Utilities
 {
+    /// <summary>
+    /// Chế độ tính toán thống kê cuối nhóm / cuối bảng cho một cột báo cáo.
+    /// </summary>
+    public enum ReportSummaryMode
+    {
+        None = 0,
+        Sum = 1,
+        Average = 2,
+        Count = 3,
+        Max = 4,
+        Min = 5
+    }
+
+    internal sealed class SummaryBucket
+    {
+        public decimal Sum;
+        public int Count;
+        public decimal? Min;
+        public decimal? Max;
+
+        public void Add(object rawValue, ReportSummaryMode mode)
+        {
+            if (rawValue == null || rawValue == DBNull.Value) return;
+            if (mode == ReportSummaryMode.Count)
+            {
+                if (!(rawValue is string s) || !string.IsNullOrWhiteSpace(s))
+                    Count++;
+                return;
+            }
+
+            if (!TryConvertDecimal(rawValue, out decimal d)) return;
+            Sum += d;
+            Count++;
+            if (!Min.HasValue || d < Min.Value) Min = d;
+            if (!Max.HasValue || d > Max.Value) Max = d;
+        }
+
+        public bool TryGetResult(ReportSummaryMode mode, out decimal value)
+        {
+            value = 0m;
+            if (mode == ReportSummaryMode.None) return false;
+            if (mode == ReportSummaryMode.Count)
+            {
+                value = Count;
+                return true;
+            }
+            if (Count == 0) return false;
+            switch (mode)
+            {
+                case ReportSummaryMode.Sum:
+                    value = Sum;
+                    return true;
+                case ReportSummaryMode.Average:
+                    value = Sum / Count;
+                    return true;
+                case ReportSummaryMode.Max:
+                    value = Max.Value;
+                    return true;
+                case ReportSummaryMode.Min:
+                    value = Min.Value;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool TryConvertDecimal(object val, out decimal num)
+        {
+            num = 0m;
+            if (val is byte b) { num = b; return true; }
+            if (val is short s) { num = s; return true; }
+            if (val is int i) { num = i; return true; }
+            if (val is long l) { num = l; return true; }
+            if (val is decimal d) { num = d; return true; }
+            if (val is double db)
+            {
+                if (double.IsNaN(db) || double.IsInfinity(db)) return false;
+                num = Convert.ToDecimal(db);
+                return true;
+            }
+            if (val is float fl)
+            {
+                if (float.IsNaN(fl) || float.IsInfinity(fl)) return false;
+                num = Convert.ToDecimal(fl);
+                return true;
+            }
+            string text = val.ToString();
+            return !string.IsNullOrWhiteSpace(text) && DataHelper.TryParseDecimal(text, out num);
+        }
+    }
+
     /// <summary>
     /// Định nghĩa cấu hình một cột trong báo cáo HTML/Excel.
     /// </summary>
     public class ReportColumn
     {
+        private ReportSummaryMode _summaryMode = ReportSummaryMode.None;
+
         /// <summary>Tên cột trong DataTable nguồn.</summary>
         public string ColumnName { get; set; }
 
@@ -27,45 +120,95 @@ namespace ExamHelper.Utilities
         /// <summary>Căn lề cột (Trái, Giữa, Phải).</summary>
         public HorizontalAlignment Alignment { get; set; } = HorizontalAlignment.Left;
 
-        /// <summary>Cột này có cần tính tổng ở dòng Tổng cộng hay không.</summary>
-        public bool IsSum { get; set; }
+        /// <summary>Cột này có tính tổng (SUM) ở dòng Tổng cộng hay không.</summary>
+        public bool IsSum
+        {
+            get => _summaryMode == ReportSummaryMode.Sum;
+            set
+            {
+                if (value) _summaryMode = ReportSummaryMode.Sum;
+                else if (_summaryMode == ReportSummaryMode.Sum) _summaryMode = ReportSummaryMode.None;
+            }
+        }
+
+        /// <summary>Chế độ thống kê cuối nhóm / cuối bảng (Sum, Average, Count, Max, Min).</summary>
+        public ReportSummaryMode SummaryMode
+        {
+            get => _summaryMode;
+            set => _summaryMode = value;
+        }
+
+        internal string SummaryBadge
+        {
+            get
+            {
+                switch (_summaryMode)
+                {
+                    case ReportSummaryMode.Sum: return " [Σ]";
+                    case ReportSummaryMode.Average: return " [TB]";
+                    case ReportSummaryMode.Count: return " [Đếm]";
+                    case ReportSummaryMode.Max: return " [Max]";
+                    case ReportSummaryMode.Min: return " [Min]";
+                    default: return "";
+                }
+            }
+        }
 
         /// <summary>Khởi tạo cột báo cáo đầy đủ thông số.</summary>
-        public ReportColumn(string columnName, string headerText = null, string format = null, 
+        public ReportColumn(string columnName, string headerText = null, string format = null,
             HorizontalAlignment alignment = HorizontalAlignment.Left, bool isSum = false)
+            : this(columnName, headerText, format, alignment, isSum ? ReportSummaryMode.Sum : ReportSummaryMode.None)
+        {
+        }
+
+        /// <summary>Khởi tạo cột báo cáo với chế độ thống kê chỉ định.</summary>
+        public ReportColumn(string columnName, string headerText, string format,
+            HorizontalAlignment alignment, ReportSummaryMode summaryMode)
         {
             ColumnName = columnName;
             HeaderText = headerText ?? columnName;
             Format = format;
             Alignment = alignment;
-            IsSum = isSum;
+            _summaryMode = summaryMode;
         }
 
         /// <summary>Khởi tạo cột báo cáo căn lề nhanh.</summary>
         public ReportColumn(string columnName, string headerText, HorizontalAlignment alignment)
-            : this(columnName, headerText, null, alignment, false) { }
+            : this(columnName, headerText, null, alignment, ReportSummaryMode.None) { }
+
+        /// <summary>Tạo bản sao cấu hình cột độc lập.</summary>
+        public ReportColumn Clone() => new ReportColumn(ColumnName, HeaderText, Format, Alignment, SummaryMode);
     }
 
     /// <summary>
-    /// Lớp tiện ích tạo báo cáo HTML chuẩn in ấn, xem trước qua WebBrowser và xuất file Excel (.xls) dùng chung cho mọi bài thi.
+    /// Lớp tiện ích tạo báo cáo HTML chuẩn in ấn, xem trước qua WebBrowser, xuất file Excel (.xls),
+    /// đồng thời hỗ trợ chuẩn bị bảng STT và thao tác/xuất PDF/Excel cho RDLC ReportViewer.
     /// </summary>
     public static class ReportHelper
     {
         /// <summary>
-        /// Tạo chuỗi mã HTML báo cáo hoàn chỉnh từ DataTable (hỗ trợ gom nhóm, tính tổng, phân trang).
+        /// Tạo chuỗi mã HTML báo cáo hoàn chỉnh từ DataTable (hỗ trợ gom nhóm, tính tổng, chân trang số trang).
         /// </summary>
         /// <param name="table">DataTable nguồn chứa dữ liệu.</param>
         /// <param name="reportTitle">Tiêu đề lớn của báo cáo.</param>
-        /// <param name="filterCondition">Chuỗi mô tả điều kiện lọc (ví dụ: "Phòng ban: Tất cả").</param>
+        /// <param name="filterCondition">Chuỗi mô tả điều kiện lọc (ví dụ: "Phòng ban: Tất cả; Giới tính: Nữ").</param>
         /// <param name="groupByColumn">Tên cột dùng để gom nhóm (ví dụ: "TenPB", "TenCK"). Để null nếu không gom nhóm.</param>
         /// <param name="groupPrefix">Tiền tố hiển thị trước tên nhóm (ví dụ: "Phòng ban: ", "Chuyên khoa: ").</param>
         /// <param name="columns">Danh sách cấu hình các cột hiển thị. Nếu null sẽ tự động lấy tất cả các cột.</param>
         /// <param name="companyName">Tên cơ quan / doanh nghiệp ở góc trên bên trái.</param>
         /// <param name="signerTitle">Chức danh người ký dưới chân báo cáo.</param>
+        /// <param name="showGroupTotals">Có hiển thị dòng tổng phụ ở cuối mỗi nhóm hay không (mặc định: false).</param>
+        /// <param name="pageFooter">Văn bản chân trang (mặc định: "Trang 1/1"). Để null nếu muốn ẩn.</param>
+        /// <param name="dateFormat">Định dạng ngày lập (mặc định: "dd/MM/yyyy").</param>
+        /// <param name="showStt">Có hiển thị cột STT ở đầu bảng hay không (mặc định: true).</param>
+        /// <param name="landscape">In khổ giấy ngang (A4 landscape) nếu true (mặc định: false - khổ dọc).</param>
+        /// <param name="fontSizePt">Cỡ chữ bảng dữ liệu khi hiển thị/in HTML (mặc định: 13).</param>
         /// <returns>Chuỗi mã HTML hoàn chỉnh sẵn sàng nạp vào WebBrowser hoặc lưu thành file .xls.</returns>
         public static string GenerateHtml(DataTable table, string reportTitle, string filterCondition = null,
             string groupByColumn = null, string groupPrefix = null, IEnumerable<ReportColumn> columns = null,
-            string companyName = "ĐƠN VỊ QUẢN LÝ", string signerTitle = "Người lập biểu")
+            string companyName = "ĐƠN VỊ QUẢN LÝ", string signerTitle = "Người lập biểu",
+            bool showGroupTotals = false, string pageFooter = "Trang 1/1", string dateFormat = "dd/MM/yyyy",
+            bool showStt = true, bool landscape = false, int fontSizePt = 13)
         {
             if (table == null) table = new DataTable();
 
@@ -73,53 +216,35 @@ namespace ExamHelper.Utilities
             if (colList == null || colList.Count == 0)
             {
                 // Tự động nhận diện cột từ DataTable
-                colList = new List<ReportColumn>();
-                foreach (DataColumn dc in table.Columns)
-                {
-                    var align = HorizontalAlignment.Left;
-                    string format = null;
-                    bool isSum = false;
-
-                    if (dc.DataType == typeof(DateTime))
-                    {
-                        align = HorizontalAlignment.Center;
-                        format = "dd/MM/yyyy";
-                    }
-                    else if (dc.DataType == typeof(decimal) || dc.DataType == typeof(double) || dc.DataType == typeof(int) || dc.DataType == typeof(long))
-                    {
-                        align = HorizontalAlignment.Right;
-                        format = "N0";
-                        isSum = true;
-                    }
-                    else if (dc.DataType == typeof(bool))
-                    {
-                        align = HorizontalAlignment.Center;
-                    }
-
-                    colList.Add(new ReportColumn(dc.ColumnName, dc.ColumnName, format, align, isSum));
-                }
+                colList = BuildAutoColumns(table, groupByColumn, null);
             }
+
+            int cellPx = Math.Max(9, Math.Min(22, fontSizePt <= 0 ? 13 : fontSizePt));
+            int bodyPx = cellPx + 1;
 
             var sb = new StringBuilder();
             sb.Append(@"<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + EscapeHtml(reportTitle) + @"</title><style>
-                body { font-family: 'Times New Roman', serif; margin: 25px 35px; font-size: 14px; color: #222; }
+                @page { size: A4 " + (landscape ? "landscape" : "portrait") + @"; margin: 12mm; }
+                body { font-family: 'Times New Roman', serif; margin: 25px 35px; font-size: " + bodyPx + @"px; color: #222; }
                 table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-                th, td { border: 1px solid #444; padding: 6px 8px; font-size: 13.5px; }
+                th, td { border: 1px solid #444; padding: 6px 8px; font-size: " + cellPx + @"px; }
                 th { background-color: #dbe5f1; text-align: center; font-weight: bold; }
-                .nhom { font-weight: bold; background-color: #f2f4f7; color: #1f497d; font-size: 14px; }
+                .nhom { font-weight: bold; background-color: #f2f4f7; color: #1f497d; font-size: " + bodyPx + @"px; }
                 .subtotal { font-style: italic; background-color: #fafbfc; font-weight: bold; }
-                .tong { font-weight: bold; background-color: #fde9d9; font-size: 14px; }
+                .tong { font-weight: bold; background-color: #fde9d9; font-size: " + bodyPx + @"px; }
                 .c { text-align: center; } .r { text-align: right; } .l { text-align: left; }
+                .footer { text-align: center; font-style: italic; margin-top: 30px; font-size: " + Math.Max(9, cellPx - 1) + @"px; color: #444; }
                 @media print {
-                    body { margin: 15mm; }
+                    body { margin: 12mm; }
                     .no-print { display: none; }
                 }
             </style></head><body>");
 
             // Phần đầu biểu mẫu
+            string safeDateFmt = string.IsNullOrWhiteSpace(dateFormat) ? "dd/MM/yyyy" : dateFormat;
             sb.Append("<table><tr>");
             sb.Append("<td style='border:none;font-weight:bold;text-transform:uppercase;'>" + EscapeHtml(companyName) + "</td>");
-            sb.Append("<td style='border:none;text-align:right;font-style:italic;'>Ngày lập: " + DateTime.Now.ToString("dd/MM/yyyy HH:mm") + "</td>");
+            sb.Append("<td style='border:none;text-align:right;font-style:italic;'>Ngày lập: " + DateTime.Now.ToString(safeDateFmt) + "</td>");
             sb.Append("</tr></table>");
 
             sb.Append("<h2 style='text-align:center;margin:15px 0 5px;color:#1f497d;text-transform:uppercase;'>" + EscapeHtml(reportTitle) + "</h2>");
@@ -130,49 +255,45 @@ namespace ExamHelper.Utilities
             }
 
             // Bắt đầu bảng dữ liệu
-            sb.Append("<table><thead><tr><th style='width:45px;'>STT</th>");
+            sb.Append("<table><thead><tr>");
+            if (showStt) sb.Append("<th style='width:45px;'>STT</th>");
             foreach (var col in colList)
             {
                 sb.Append("<th>" + EscapeHtml(col.HeaderText) + "</th>");
             }
             sb.Append("</tr></thead><tbody>");
 
-            int totalColumns = colList.Count + 1; // +1 cho cột STT
+            int totalColumns = colList.Count + (showStt ? 1 : 0);
             int stt = 1;
-            var grandTotals = new Dictionary<string, decimal>();
-            foreach (var col in colList.Where(c => c.IsSum)) grandTotals[col.ColumnName] = 0;
+            var grandBuckets = CreateSummaryBuckets(colList);
 
             bool hasGrouping = !string.IsNullOrEmpty(groupByColumn) && table.Columns.Contains(groupByColumn);
 
             if (hasGrouping)
             {
-                DataTable distinctGroups = table.DefaultView.ToTable(true, groupByColumn);
                 string prefix = groupPrefix ?? (groupByColumn + ": ");
+                var groupedRows = table.Rows.Cast<DataRow>()
+                    .GroupBy(r => r[groupByColumn] == DBNull.Value ? string.Empty : (r[groupByColumn]?.ToString() ?? string.Empty));
 
-                foreach (DataRow gRow in distinctGroups.Rows)
+                foreach (var group in groupedRows)
                 {
-                    string groupVal = gRow[groupByColumn]?.ToString() ?? "";
-                    string safeVal = groupVal.Replace("'", "''");
-                    DataRow[] rows = table.Select($"[{groupByColumn}] = '{safeVal}'");
-                    if (rows.Length == 0) continue;
+                    var rows = group.ToList();
+                    if (rows.Count == 0) continue;
 
-                    sb.Append($"<tr><td colspan='{totalColumns}' class='nhom'>{EscapeHtml(prefix + groupVal)} ({rows.Length} bản ghi)</td></tr>");
+                    string groupDisplay = string.IsNullOrEmpty(group.Key) ? "Khác" : group.Key;
+                    sb.Append($"<tr><td colspan='{totalColumns}' class='nhom'>{EscapeHtml(prefix + groupDisplay)} ({rows.Count} bản ghi)</td></tr>");
 
-                    var groupTotals = new Dictionary<string, decimal>();
-                    foreach (var col in colList.Where(c => c.IsSum)) groupTotals[col.ColumnName] = 0;
+                    var groupBuckets = CreateSummaryBuckets(colList);
 
                     foreach (DataRow r in rows)
                     {
-                        RenderRow(sb, r, colList, stt++);
-                        AccumulateSums(r, colList, groupTotals, grandTotals);
+                        RenderRow(sb, r, colList, stt++, showStt);
+                        AccumulateSummaries(r, colList, groupBuckets, grandBuckets);
                     }
 
-                    // Dòng tổng cộng nhóm (nếu có cột tính tổng)
-                    if (groupTotals.Count > 0)
+                    if (showGroupTotals && groupBuckets.Count > 0)
                     {
-                        sb.Append($"<tr class='subtotal'><td colspan='2' class='c'>Tổng {EscapeHtml(groupVal)}:</td>");
-                        RenderSumCells(sb, colList, groupTotals, 2);
-                        sb.Append("</tr>");
+                        RenderTotalRow(sb, GetGroupSummaryLabel(groupDisplay, colList), colList, groupBuckets, "subtotal", showStt);
                     }
                 }
             }
@@ -180,31 +301,118 @@ namespace ExamHelper.Utilities
             {
                 foreach (DataRow r in table.Rows)
                 {
-                    RenderRow(sb, r, colList, stt++);
-                    AccumulateSums(r, colList, null, grandTotals);
+                    RenderRow(sb, r, colList, stt++, showStt);
+                    AccumulateSummaries(r, colList, null, grandBuckets);
                 }
             }
 
-            // Dòng TỔNG CỘNG chung
-            if (grandTotals.Count > 0)
+            // Dòng TỔNG CỘNG / THỐNG KÊ chung
+            if (grandBuckets.Count > 0)
             {
-                sb.Append($"<tr class='tong'><td colspan='2' class='c'>TỔNG CỘNG</td>");
-                RenderSumCells(sb, colList, grandTotals, 2);
-                sb.Append("</tr>");
+                RenderTotalRow(sb, GetGrandSummaryLabel(colList), colList, grandBuckets, "tong", showStt);
             }
 
             sb.Append("</tbody></table>");
 
             // Chữ ký Người lập biểu
-            sb.Append("<table style='margin-top:35px;'><tr><td style='border:none;'></td><td style='border:none;text-align:right;padding-right:45px;'><b>" + EscapeHtml(signerTitle) + "</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br></td></tr></table>");
+            if (!string.IsNullOrWhiteSpace(signerTitle))
+            {
+                sb.Append("<table style='margin-top:35px;'><tr><td style='border:none;'></td><td style='border:none;text-align:right;padding-right:45px;'><b>" + EscapeHtml(signerTitle) + "</b><br><i>(Ký, ghi rõ họ tên)</i><br><br><br><br></td></tr></table>");
+            }
+
+            // Chân trang số trang
+            if (!string.IsNullOrWhiteSpace(pageFooter))
+            {
+                sb.Append($"<div class='footer'>{EscapeHtml(pageFooter)}</div>");
+            }
+
             sb.Append("</body></html>");
 
             return sb.ToString();
         }
 
-        private static void RenderRow(StringBuilder sb, DataRow r, List<ReportColumn> colList, int stt)
+        internal static List<ReportColumn> BuildAutoColumns(DataTable table, string groupByColumn, string sumColumn)
         {
-            sb.Append($"<tr><td class='c'>{stt}</td>");
+            var cols = new List<ReportColumn>();
+            if (table == null) return cols;
+
+            foreach (DataColumn dc in table.Columns)
+            {
+                if (!string.IsNullOrEmpty(groupByColumn) && dc.ColumnName == groupByColumn)
+                    continue;
+
+                bool hasExplicitSum = !string.IsNullOrEmpty(sumColumn);
+                bool isSum = hasExplicitSum && (dc.ColumnName == sumColumn);
+                var align = HorizontalAlignment.Left;
+                string fmt = null;
+
+                if (dc.DataType == typeof(DateTime))
+                {
+                    align = HorizontalAlignment.Center;
+                    fmt = "dd/MM/yyyy";
+                }
+                else if (dc.DataType == typeof(decimal) || dc.DataType == typeof(int) || dc.DataType == typeof(long))
+                {
+                    align = HorizontalAlignment.Right;
+                    fmt = "N0";
+                    if (!hasExplicitSum) isSum = true;
+                }
+                else if (dc.DataType == typeof(double) || dc.DataType == typeof(float))
+                {
+                    align = HorizontalAlignment.Right;
+                    fmt = isSum ? "N0" : "0.##";
+                }
+                else if (dc.DataType == typeof(bool))
+                {
+                    align = HorizontalAlignment.Center;
+                }
+
+                cols.Add(new ReportColumn(dc.ColumnName, dc.ColumnName, fmt, align, isSum));
+            }
+            return cols;
+        }
+
+        private static void RenderTotalRow(StringBuilder sb, string label, List<ReportColumn> colList,
+            Dictionary<string, SummaryBucket> buckets, string cssClass, bool showStt = true)
+        {
+            if (showStt)
+            {
+                // Nếu có >= 2 cột dữ liệu và cột đầu tiên không thống kê (như Mã NV), đặt nhãn ở cột dữ liệu đầu tiên
+                bool placeLabelInFirstDataCol = colList.Count >= 2 && !HasSummary(colList[0]);
+
+                if (placeLabelInFirstDataCol)
+                {
+                    sb.Append($"<tr class='{cssClass}'><td></td><td class='c'>{EscapeHtml(label)}</td>");
+                    RenderSummaryCells(sb, colList, buckets, startDataColIndex: 1);
+                }
+                else
+                {
+                    sb.Append($"<tr class='{cssClass}'><td class='c'>{EscapeHtml(label)}</td>");
+                    RenderSummaryCells(sb, colList, buckets, startDataColIndex: 0);
+                }
+            }
+            else if (colList.Count > 0)
+            {
+                if (!HasSummary(colList[0]))
+                {
+                    sb.Append($"<tr class='{cssClass}'><td class='c'>{EscapeHtml(label)}</td>");
+                    RenderSummaryCells(sb, colList, buckets, startDataColIndex: 1);
+                }
+                else
+                {
+                    buckets.TryGetValue(colList[0].ColumnName, out SummaryBucket bucket0);
+                    string text0 = FormatSummaryDisplay(colList[0], bucket0);
+                    sb.Append($"<tr class='{cssClass}'><td class='r'><span style='float:left;font-weight:bold;'>{EscapeHtml(label)}</span>{EscapeHtml(text0)}</td>");
+                    RenderSummaryCells(sb, colList, buckets, startDataColIndex: 1);
+                }
+            }
+            sb.Append("</tr>");
+        }
+
+        private static void RenderRow(StringBuilder sb, DataRow r, List<ReportColumn> colList, int stt, bool showStt = true)
+        {
+            sb.Append("<tr>");
+            if (showStt) sb.Append($"<td class='c'>{stt}</td>");
             foreach (var col in colList)
             {
                 string alignClass = col.Alignment == HorizontalAlignment.Center ? "c" : (col.Alignment == HorizontalAlignment.Right ? "r" : "l");
@@ -215,31 +423,74 @@ namespace ExamHelper.Utilities
             sb.Append("</tr>");
         }
 
-        private static void AccumulateSums(DataRow r, List<ReportColumn> colList, 
-            Dictionary<string, decimal> groupTotals, Dictionary<string, decimal> grandTotals)
+        internal static bool HasSummary(ReportColumn col) => col != null && col.SummaryMode != ReportSummaryMode.None;
+
+        internal static string GetGrandSummaryLabel(List<ReportColumn> colList)
+            => colList != null && colList.Any(c => c.SummaryMode == ReportSummaryMode.Sum) ? "TỔNG CỘNG" : "THỐNG KÊ";
+
+        internal static string GetGroupSummaryLabel(string groupDisplay, List<ReportColumn> colList)
+            => colList != null && colList.Any(c => c.SummaryMode == ReportSummaryMode.Sum)
+                ? $"Tổng {groupDisplay}:"
+                : $"Thống kê {groupDisplay}:";
+
+        internal static Dictionary<string, SummaryBucket> CreateSummaryBuckets(IEnumerable<ReportColumn> colList)
         {
-            foreach (var col in colList.Where(c => c.IsSum))
+            var dict = new Dictionary<string, SummaryBucket>(StringComparer.OrdinalIgnoreCase);
+            if (colList == null) return dict;
+            foreach (var col in colList.Where(HasSummary))
             {
-                if (r.Table.Columns.Contains(col.ColumnName) && r[col.ColumnName] != DBNull.Value)
-                {
-                    decimal d = DataHelper.ToDecimal(r[col.ColumnName], 0);
-                    if (groupTotals != null) groupTotals[col.ColumnName] += d;
-                    if (grandTotals != null) grandTotals[col.ColumnName] += d;
-                }
+                if (!dict.ContainsKey(col.ColumnName))
+                    dict[col.ColumnName] = new SummaryBucket();
+            }
+            return dict;
+        }
+
+        internal static void AccumulateSummaries(DataRow r, List<ReportColumn> colList,
+            Dictionary<string, SummaryBucket> groupBuckets, Dictionary<string, SummaryBucket> grandBuckets)
+        {
+            foreach (var col in colList.Where(HasSummary))
+            {
+                if (!r.Table.Columns.Contains(col.ColumnName)) continue;
+                object raw = r[col.ColumnName];
+                if (groupBuckets != null && groupBuckets.TryGetValue(col.ColumnName, out SummaryBucket gb))
+                    gb.Add(raw, col.SummaryMode);
+                if (grandBuckets != null && grandBuckets.TryGetValue(col.ColumnName, out SummaryBucket grb))
+                    grb.Add(raw, col.SummaryMode);
             }
         }
 
-        private static void RenderSumCells(StringBuilder sb, List<ReportColumn> colList, 
-            Dictionary<string, decimal> totals, int skippedFirstCols)
+        internal static string FormatSummaryDisplay(ReportColumn col, SummaryBucket bucket)
         {
-            // skippedFirstCols là số cột đã bị gộp ở ô tiêu đề "TỔNG CỘNG" (thường là 2: STT + cột đầu tiên)
-            for (int i = skippedFirstCols - 1; i < colList.Count; i++)
+            if (col == null || bucket == null || !bucket.TryGetResult(col.SummaryMode, out decimal val))
+                return "";
+
+            switch (col.SummaryMode)
+            {
+                case ReportSummaryMode.Sum:
+                    return val.ToString(string.IsNullOrWhiteSpace(col.Format) ? "N0" : col.Format);
+                case ReportSummaryMode.Average:
+                    return "TB: " + val.ToString(string.IsNullOrWhiteSpace(col.Format) ? "0.##" : col.Format);
+                case ReportSummaryMode.Count:
+                    return "Đếm: " + val.ToString("N0");
+                case ReportSummaryMode.Max:
+                    return "Max: " + val.ToString(string.IsNullOrWhiteSpace(col.Format) ? "N0" : col.Format);
+                case ReportSummaryMode.Min:
+                    return "Min: " + val.ToString(string.IsNullOrWhiteSpace(col.Format) ? "N0" : col.Format);
+                default:
+                    return "";
+            }
+        }
+
+        private static void RenderSummaryCells(StringBuilder sb, List<ReportColumn> colList,
+            Dictionary<string, SummaryBucket> buckets, int startDataColIndex)
+        {
+            for (int i = startDataColIndex; i < colList.Count; i++)
             {
                 var col = colList[i];
-                if (col.IsSum && totals.ContainsKey(col.ColumnName))
+                if (HasSummary(col) && buckets.TryGetValue(col.ColumnName, out SummaryBucket bucket))
                 {
-                    string fmt = col.Format ?? "N0";
-                    sb.Append($"<td class='r'>{totals[col.ColumnName].ToString(fmt)}</td>");
+                    string display = FormatSummaryDisplay(col, bucket);
+                    sb.Append($"<td class='r'>{EscapeHtml(display)}</td>");
                 }
                 else
                 {
@@ -247,6 +498,8 @@ namespace ExamHelper.Utilities
                 }
             }
         }
+
+        internal static string FormatCellValue(object val, string format) => FormatValue(val, format);
 
         private static string FormatValue(object val, string format)
         {
@@ -272,6 +525,43 @@ namespace ExamHelper.Utilities
                        .Replace("\"", "&quot;");
         }
 
+        /// <summary>
+        /// Loại bỏ ký tự không hợp lệ trong tên file để truyền an toàn vào SaveFileDialog.
+        /// </summary>
+        public static string SanitizeFileName(string fileName, string fallback = "BaoCao")
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+                return fallback;
+
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            var sb = new StringBuilder(fileName.Length);
+            foreach (char c in fileName.Trim())
+            {
+                sb.Append(invalidChars.Contains(c) ? '_' : c);
+            }
+            string cleaned = sb.ToString().Trim();
+            return string.IsNullOrEmpty(cleaned) ? fallback : cleaned;
+        }
+
+        /// <summary>
+        /// Tạo bản sao DataTable có chèn thêm cột STT (1..N) ở đầu bảng.
+        /// Rất hữu ích khi truyền DataTable vào RDLC ReportViewer hoặc Crystal Report.
+        /// </summary>
+        public static DataTable PrepareReportTable(DataTable source, string sttColumnName = "STT")
+        {
+            DataTable result = source != null ? source.Copy() : new DataTable();
+            if (!result.Columns.Contains(sttColumnName))
+            {
+                DataColumn sttCol = result.Columns.Add(sttColumnName, typeof(int));
+                sttCol.SetOrdinal(0);
+            }
+
+            for (int i = 0; i < result.Rows.Count; i++)
+            {
+                result.Rows[i][sttColumnName] = i + 1;
+            }
+            return result;
+        }
 
         /// <summary>
         /// Mở hộp thoại lưu file và xuất nội dung HTML thành file Excel (.xls) có định dạng chuẩn.
@@ -281,17 +571,24 @@ namespace ExamHelper.Utilities
         /// <returns>True nếu người dùng đã lưu thành công, False nếu bấm Hủy.</returns>
         public static bool ExportExcel(string htmlContent, string defaultFileName = "BaoCao.xls")
         {
+            string safeName = SanitizeFileName(defaultFileName, "BaoCao.xls");
+            if (!safeName.EndsWith(".xls", StringComparison.OrdinalIgnoreCase) &&
+                !safeName.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+            {
+                safeName += ".xls";
+            }
+
             using (var sfd = new SaveFileDialog
             {
                 Filter = "Excel Workbook (*.xls)|*.xls|HTML File (*.html)|*.html",
-                FileName = defaultFileName
+                FileName = safeName
             })
             {
                 if (sfd.ShowDialog() == DialogResult.OK)
                 {
                     try
                     {
-                        File.WriteAllText(sfd.FileName, htmlContent, Encoding.UTF8);
+                        File.WriteAllText(sfd.FileName, htmlContent ?? "", new UTF8Encoding(true));
                         MessageHelper.Success("xuất file Excel");
                         return true;
                     }
@@ -306,14 +603,97 @@ namespace ExamHelper.Utilities
         }
 
         /// <summary>
-        /// Hiển thị Form Báo Cáo dùng chung dạng Modal Dialog với đầy đủ tính năng: Xem trước, In ấn và Xuất Excel.
+        /// Tạo mảng byte file Excel chuẩn OpenXML (.xlsx) thật (không cảnh báo định dạng khi mở bằng Microsoft Excel).
         /// </summary>
-        public static void ShowReport(DataTable dataTable, string reportTitle, string filterCondition = null,
+        public static byte[] BuildXlsxBytes(DataTable table, string reportTitle, string filterCondition = null,
             string groupByColumn = null, string groupPrefix = null, IEnumerable<ReportColumn> columns = null,
-            string companyName = "ĐƠN VỊ QUẢN LÝ", IWin32Window owner = null)
+            string companyName = "ĐƠN VỊ QUẢN LÝ", string signerTitle = "Người lập biểu",
+            bool showGroupTotals = false, string pageFooter = "Trang 1/1", string dateFormat = "dd/MM/yyyy",
+            bool showStt = true, bool landscape = false, int fontSizePt = 13)
         {
-            string html = GenerateHtml(dataTable, reportTitle, filterCondition, groupByColumn, groupPrefix, columns, companyName);
-            using (var form = new FormReportViewer(html, reportTitle))
+            return XlsxExporter.BuildBytes(table, reportTitle, filterCondition, groupByColumn, groupPrefix,
+                columns, companyName, signerTitle, showGroupTotals, pageFooter, dateFormat, showStt, landscape, fontSizePt);
+        }
+
+        /// <summary>
+        /// Mở hộp thoại lưu file và xuất báo cáo ra file Excel chuẩn OpenXML (.xlsx) hoặc HTML.
+        /// </summary>
+        public static bool ExportXlsx(DataTable table, string reportTitle, string htmlFallback = null,
+            string filterCondition = null, string groupByColumn = null, string groupPrefix = null,
+            IEnumerable<ReportColumn> columns = null, string companyName = "ĐƠN VỊ QUẢN LÝ",
+            string signerTitle = "Người lập biểu", bool showGroupTotals = false, string pageFooter = "Trang 1/1",
+            string dateFormat = "dd/MM/yyyy", bool showStt = true, string defaultFileName = null,
+            bool landscape = false, int fontSizePt = 13)
+        {
+            string baseName = SanitizeFileName(defaultFileName ?? reportTitle, "BaoCao");
+            if (baseName.EndsWith(".xls", StringComparison.OrdinalIgnoreCase))
+                baseName = baseName.Substring(0, baseName.Length - 4);
+            if (!baseName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+                baseName += ".xlsx";
+
+            using (var sfd = new SaveFileDialog
+            {
+                Filter = "Excel Workbook (*.xlsx)|*.xlsx|HTML File (*.html)|*.html",
+                FileName = baseName
+            })
+            {
+                if (sfd.ShowDialog() != DialogResult.OK)
+                    return false;
+
+                try
+                {
+                    if (sfd.FileName.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string html = htmlFallback ?? GenerateHtml(table, reportTitle, filterCondition, groupByColumn,
+                            groupPrefix, columns, companyName, signerTitle, showGroupTotals, pageFooter, dateFormat,
+                            showStt, landscape, fontSizePt);
+                        File.WriteAllText(sfd.FileName, html, new UTF8Encoding(true));
+                    }
+                    else
+                    {
+                        byte[] bytes = BuildXlsxBytes(table, reportTitle, filterCondition, groupByColumn,
+                            groupPrefix, columns, companyName, signerTitle, showGroupTotals, pageFooter, dateFormat,
+                            showStt, landscape, fontSizePt);
+                        File.WriteAllBytes(sfd.FileName, bytes);
+                    }
+                    MessageHelper.Success("xuất file Excel");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    MessageHelper.Error("Lỗi khi lưu file: " + ex.Message);
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Hiển thị Form Báo Cáo trực quan dùng chung: tự gom tất cả trường dữ liệu vào 1 bảng,
+        /// hỗ trợ kéo-thả ẩn/hiện/sắp xếp/gom nhóm cột, sửa tiêu đề trực tiếp và In/Lưu PDF, Xuất Excel.
+        /// </summary>
+        public static void ShowReport(DataTable dataTable, string reportTitle = "BÁO CÁO THỐNG KÊ", string filterCondition = null,
+            string groupByColumn = null, string groupPrefix = null, IEnumerable<ReportColumn> columns = null,
+            string companyName = "ĐƠN VỊ QUẢN LÝ", IWin32Window owner = null,
+            string signerTitle = "Người lập biểu", bool showGroupTotals = false, string pageFooter = "Trang 1/1",
+            bool openDesigner = true, bool landscape = false, int fontSizePt = 13)
+        {
+            var options = new ReportDesignOptions
+            {
+                ReportTitle = reportTitle,
+                FilterCondition = filterCondition,
+                GroupByColumn = groupByColumn,
+                GroupPrefix = groupPrefix,
+                Columns = columns,
+                CompanyName = companyName,
+                SignerTitle = signerTitle,
+                ShowGroupTotals = showGroupTotals,
+                PageFooter = pageFooter,
+                OpenDesigner = openDesigner,
+                Landscape = landscape,
+                FontSizePt = fontSizePt
+            };
+
+            using (var form = new FormReportViewer(dataTable, options))
             {
                 if (owner != null) form.ShowDialog(owner);
                 else form.ShowDialog();
@@ -321,104 +701,470 @@ namespace ExamHelper.Utilities
         }
 
         /// <summary>
-        /// Hiển thị báo cáo nhanh trong 1 dòng code (tự động gom nhóm và tính tổng cột chỉ định).
+        /// Hiển thị báo cáo nhanh trong 1 dòng code (tự động gom nhóm và tính tổng cột chỉ định),
+        /// cho phép người dùng chỉnh sửa/kéo-thả cột trực tiếp trước khi in.
         /// </summary>
-        public static void ShowReport(DataTable dataTable, string reportTitle, string groupByColumn, 
-            string sumColumn, string filterCondition = null, IWin32Window owner = null)
+        public static void ShowReport(DataTable dataTable, string reportTitle, string groupByColumn,
+            string sumColumn, string filterCondition = null, IWin32Window owner = null,
+            string companyName = "ĐƠN VỊ QUẢN LÝ", string groupPrefix = null, bool showGroupTotals = false,
+            bool openDesigner = true, bool landscape = false, int fontSizePt = 13)
         {
-            var cols = new List<ReportColumn>();
-            foreach (DataColumn dc in dataTable.Columns)
-            {
-                if (dc.ColumnName == groupByColumn) continue; // Ẩn cột gom nhóm khỏi bảng chi tiết để đỡ trùng
+            var cols = BuildAutoColumns(dataTable, groupByColumn, sumColumn);
+            ShowReport(dataTable, reportTitle, filterCondition, groupByColumn, groupPrefix, cols,
+                companyName, owner, showGroupTotals: showGroupTotals, openDesigner: openDesigner,
+                landscape: landscape, fontSizePt: fontSizePt);
+        }
 
-                bool isSum = (dc.ColumnName == sumColumn);
-                string fmt = isSum ? "N0" : (dc.DataType == typeof(DateTime) ? "dd/MM/yyyy" : null);
-                var align = isSum ? HorizontalAlignment.Right : (dc.DataType == typeof(DateTime) ? HorizontalAlignment.Center : HorizontalAlignment.Left);
-                cols.Add(new ReportColumn(dc.ColumnName, dc.ColumnName, fmt, align, isSum));
+        /// <summary>
+        /// Gom toàn bộ dữ liệu và cấu hình cột trực tiếp từ DataGridView để mở Form báo cáo trực quan
+        /// (cho phép kéo-thả ẩn/hiện cột, đổi tiêu đề và in ngay không cần cấu hình trước).
+        /// </summary>
+        public static void ShowReport(DataGridView grid, string reportTitle = "BÁO CÁO THỐNG KÊ",
+            string filterCondition = null, string groupByColumn = null, string groupPrefix = null,
+            string companyName = "ĐƠN VỊ QUẢN LÝ", IWin32Window owner = null,
+            string signerTitle = "Người lập biểu", bool showGroupTotals = false, string pageFooter = "Trang 1/1",
+            bool openDesigner = true, bool landscape = false, int fontSizePt = 13)
+        {
+            if (grid == null)
+                throw new ArgumentNullException(nameof(grid), "DataGridView không được null.");
+
+            DataTable dt = ExtractTable(grid, out List<ReportColumn> cols);
+            ShowReport(dt, reportTitle, filterCondition, groupByColumn, groupPrefix, cols,
+                companyName, owner, signerTitle, showGroupTotals, pageFooter, openDesigner, landscape, fontSizePt);
+        }
+
+        /// <summary>
+        /// Thực thi trực tiếp câu lệnh SQL query và mở ngay Form báo cáo trực quan
+        /// (tự gom toàn bộ trường từ kết quả truy vấn vào 1 bảng, cho phép kéo-thả chỉnh sửa trước khi in).
+        /// </summary>
+        public static void ShowReport(string sql, string reportTitle = "BÁO CÁO THỐNG KÊ",
+            string filterCondition = null, string groupByColumn = null, string groupPrefix = null,
+            string companyName = "ĐƠN VỊ QUẢN LÝ", IWin32Window owner = null, string dbName = "default",
+            string signerTitle = "Người lập biểu", bool showGroupTotals = false, string pageFooter = "Trang 1/1",
+            bool openDesigner = true, bool landscape = false, int fontSizePt = 13)
+        {
+            DataTable dt = DbHelper.GetDataTable(sql, dbName);
+            ShowReport(dt, reportTitle, filterCondition, groupByColumn, groupPrefix, null,
+                companyName, owner, signerTitle, showGroupTotals, pageFooter, openDesigner, landscape, fontSizePt);
+        }
+
+        /// <summary>
+        /// Trích xuất DataTable và danh sách ReportColumn hiển thị từ một DataGridView (có hỗ trợ DataSource hoặc nhập tay).
+        /// </summary>
+        public static DataTable ExtractTable(DataGridView grid, out List<ReportColumn> visibleColumns)
+        {
+            if (grid == null)
+                throw new ArgumentNullException(nameof(grid));
+
+            DataTable boundTable = grid.DataSource as DataTable;
+            if (boundTable == null && grid.DataSource is BindingSource bs)
+            {
+                boundTable = bs.DataSource as DataTable ?? (bs.List as DataView)?.Table;
+            }
+            else if (boundTable == null && grid.DataSource is DataView dv)
+            {
+                boundTable = dv.Table;
             }
 
-            ShowReport(dataTable, reportTitle, filterCondition, groupByColumn, null, cols, owner: owner);
+            var cols = new List<ReportColumn>();
+            var orderedGridCols = grid.Columns.Cast<DataGridViewColumn>().OrderBy(c => c.DisplayIndex).ToList();
+
+            if (boundTable != null)
+            {
+                DataTable copy = boundTable.Copy();
+                var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var gCol in orderedGridCols)
+                {
+                    if (!gCol.Visible) continue;
+                    string propName = !string.IsNullOrWhiteSpace(gCol.DataPropertyName) ? gCol.DataPropertyName : gCol.Name;
+                    if (string.IsNullOrWhiteSpace(propName) || !copy.Columns.Contains(propName) || !usedNames.Add(propName))
+                        continue;
+
+                    DataColumn dc = copy.Columns[propName];
+                    HorizontalAlignment align = MapGridAlignment(gCol.DefaultCellStyle.Alignment, dc.DataType);
+                    string fmt = !string.IsNullOrWhiteSpace(gCol.DefaultCellStyle.Format)
+                        ? gCol.DefaultCellStyle.Format
+                        : InferDefaultFormat(dc.DataType);
+                    bool isSum = dc.DataType == typeof(decimal) || dc.DataType == typeof(int) || dc.DataType == typeof(long);
+
+                    string header = string.IsNullOrWhiteSpace(gCol.HeaderText) ? dc.ColumnName : gCol.HeaderText;
+                    cols.Add(new ReportColumn(dc.ColumnName, header, fmt, align, isSum));
+                }
+
+                visibleColumns = cols.Count > 0 ? cols : null;
+                return copy;
+            }
+
+            // DataGridView nhập trực tiếp không bind DataSource
+            var dt = new DataTable();
+            var colIndexMap = new List<(int GridColIndex, string ColumnName)>();
+            foreach (var gCol in orderedGridCols)
+            {
+                string baseName = !string.IsNullOrWhiteSpace(gCol.DataPropertyName)
+                    ? gCol.DataPropertyName
+                    : (!string.IsNullOrWhiteSpace(gCol.Name) ? gCol.Name : "Col" + gCol.Index);
+                string uniqueName = baseName;
+                int suffix = 1;
+                while (dt.Columns.Contains(uniqueName))
+                {
+                    uniqueName = baseName + "_" + (++suffix);
+                }
+
+                Type colType = gCol.ValueType ?? typeof(string);
+                dt.Columns.Add(uniqueName, colType);
+                colIndexMap.Add((gCol.Index, uniqueName));
+
+                if (gCol.Visible)
+                {
+                    HorizontalAlignment align = MapGridAlignment(gCol.DefaultCellStyle.Alignment, colType);
+                    string fmt = !string.IsNullOrWhiteSpace(gCol.DefaultCellStyle.Format)
+                        ? gCol.DefaultCellStyle.Format
+                        : InferDefaultFormat(colType);
+                    bool isSum = colType == typeof(decimal) || colType == typeof(int) || colType == typeof(long);
+                    string header = string.IsNullOrWhiteSpace(gCol.HeaderText) ? uniqueName : gCol.HeaderText;
+                    cols.Add(new ReportColumn(uniqueName, header, fmt, align, isSum));
+                }
+            }
+
+            foreach (DataGridViewRow row in grid.Rows)
+            {
+                if (row.IsNewRow) continue;
+                DataRow dr = dt.NewRow();
+                foreach (var pair in colIndexMap)
+                {
+                    dr[pair.ColumnName] = row.Cells[pair.GridColIndex].Value ?? DBNull.Value;
+                }
+                dt.Rows.Add(dr);
+            }
+
+            visibleColumns = cols.Count > 0 ? cols : null;
+            return dt;
         }
-    }
 
-    /// <summary>
-    /// Form hiển thị báo cáo dùng chung có sẵn thanh công cụ: In ấn, Xuất Excel, Đóng.
-    /// </summary>
-    public class FormReportViewer : Form
-    {
-        private readonly string _htmlContent;
-        private WebBrowser webViewer;
-        private Button btnIn;
-        private Button btnXuatExcel;
-        private Button btnDong;
-
-        /// <summary>Khởi tạo form xem báo cáo với mã HTML đã có sẵn.</summary>
-        public FormReportViewer(string htmlContent, string title = "Báo cáo thống kê")
+        private static HorizontalAlignment MapGridAlignment(DataGridViewContentAlignment gridAlign, Type dataType)
         {
-            _htmlContent = htmlContent ?? "";
-            InitializeComponents(title);
+            switch (gridAlign)
+            {
+                case DataGridViewContentAlignment.TopCenter:
+                case DataGridViewContentAlignment.MiddleCenter:
+                case DataGridViewContentAlignment.BottomCenter:
+                    return HorizontalAlignment.Center;
+                case DataGridViewContentAlignment.TopRight:
+                case DataGridViewContentAlignment.MiddleRight:
+                case DataGridViewContentAlignment.BottomRight:
+                    return HorizontalAlignment.Right;
+                case DataGridViewContentAlignment.TopLeft:
+                case DataGridViewContentAlignment.MiddleLeft:
+                case DataGridViewContentAlignment.BottomLeft:
+                    return HorizontalAlignment.Left;
+                default:
+                    if (dataType == typeof(decimal) || dataType == typeof(int) || dataType == typeof(long)
+                        || dataType == typeof(double) || dataType == typeof(float))
+                        return HorizontalAlignment.Right;
+                    if (dataType == typeof(DateTime) || dataType == typeof(bool))
+                        return HorizontalAlignment.Center;
+                    return HorizontalAlignment.Left;
+            }
         }
 
-        private void InitializeComponents(string title)
+        private static string InferDefaultFormat(Type dataType)
         {
-            this.Text = title;
-            this.Size = new Size(960, 720);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.KeyPreview = true;
-            this.KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) this.Close(); };
-
-            // Panel thanh công cụ phía trên
-            var topPanel = new Panel
-            {
-                Dock = DockStyle.Top,
-                Height = 46,
-                BackColor = Color.FromArgb(245, 247, 250)
-            };
-
-            btnIn = new Button
-            {
-                Text = "🖨️ In báo cáo (&P)",
-                Width = 135,
-                Height = 32,
-                Left = 15,
-                Top = 7,
-                Font = new Font(this.Font, FontStyle.Bold)
-            };
-            btnIn.Click += (s, e) => webViewer.ShowPrintDialog();
-
-            btnXuatExcel = new Button
-            {
-                Text = "📊 Xuất Excel (&E)",
-                Width = 135,
-                Height = 32,
-                Left = 160,
-                Top = 7
-            };
-            btnXuatExcel.Click += (s, e) => ReportHelper.ExportExcel(_htmlContent, this.Text + ".xls");
-
-            btnDong = new Button
-            {
-                Text = "Đóng (&N)",
-                Width = 95,
-                Height = 32,
-                Left = 305,
-                Top = 7
-            };
-            btnDong.Click += (s, e) => this.Close();
-
-            topPanel.Controls.AddRange(new Control[] { btnIn, btnXuatExcel, btnDong });
-
-            // Control WebBrowser hiển thị HTML
-            webViewer = new WebBrowser
-            {
-                Dock = DockStyle.Fill,
-                IsWebBrowserContextMenuEnabled = true
-            };
-
-            this.Controls.Add(webViewer);
-            this.Controls.Add(topPanel);
-
-            this.Load += (s, e) => webViewer.DocumentText = _htmlContent;
+            if (dataType == typeof(DateTime)) return "dd/MM/yyyy";
+            if (dataType == typeof(decimal) || dataType == typeof(int) || dataType == typeof(long)) return "N0";
+            if (dataType == typeof(double) || dataType == typeof(float)) return "0.##";
+            return null;
         }
+
+        #region Hỗ trợ RDLC ReportViewer (Reflection - Không phụ thuộc NuGet)
+
+        /// <summary>
+        /// Nạp DataTable và danh sách ReportParameter vào Microsoft ReportViewer (RDLC) bằng Reflection
+        /// để không gây phụ thuộc cứng giữa các phiên bản .NET Framework và .NET Core/8/10.
+        /// </summary>
+        /// <param name="reportViewer">Control ReportViewer trên Form.</param>
+        /// <param name="dataSetName">Tên DataSet khai báo trong file .rdlc.</param>
+        /// <param name="data">DataTable dữ liệu nguồn (đã lọc).</param>
+        /// <param name="parameters">Từ điển (Tên tham số → Giá trị) truyền vào RDLC.</param>
+        /// <param name="reportEmbeddedResource">Tên Embedded Resource của file .rdlc (tùy chọn).</param>
+        /// <param name="reportPath">Đường dẫn file .rdlc trên đĩa (tùy chọn).</param>
+        public static void BindRdlc(object reportViewer, string dataSetName, DataTable data,
+            Dictionary<string, string> parameters = null,
+            string reportEmbeddedResource = null, string reportPath = null)
+        {
+            if (reportViewer == null)
+                throw new ArgumentNullException(nameof(reportViewer), "ReportViewer không được null.");
+            if (string.IsNullOrWhiteSpace(dataSetName))
+                throw new ArgumentException("Tên DataSet không được để trống.", nameof(dataSetName));
+
+            Type viewerType = reportViewer.GetType();
+            PropertyInfo localReportProp = viewerType.GetProperty("LocalReport")
+                ?? throw new InvalidOperationException("Đối tượng truyền vào không có thuộc tính LocalReport.");
+
+            object localReport = localReportProp.GetValue(reportViewer)
+                ?? throw new InvalidOperationException("LocalReport đang là null.");
+
+            Type localReportType = localReport.GetType();
+            Assembly rdlcAssembly = localReportType.Assembly;
+
+            if (!string.IsNullOrWhiteSpace(reportEmbeddedResource))
+            {
+                localReportType.GetProperty("ReportEmbeddedResource")?.SetValue(localReport, reportEmbeddedResource);
+            }
+            if (!string.IsNullOrWhiteSpace(reportPath))
+            {
+                localReportType.GetProperty("ReportPath")?.SetValue(localReport, reportPath);
+            }
+
+            // Nạp DataSources
+            object dataSources = localReportType.GetProperty("DataSources")?.GetValue(localReport);
+            if (dataSources != null)
+            {
+                Type dsCollectionType = dataSources.GetType();
+                dsCollectionType.GetMethod("Clear")?.Invoke(dataSources, null);
+
+                Type rdsType = FindTypeInAssembly(rdlcAssembly, "ReportDataSource")
+                    ?? throw new InvalidOperationException("Không tìm thấy kiểu ReportDataSource trong assembly của ReportViewer.");
+
+                object rds = Activator.CreateInstance(rdsType, dataSetName, data ?? new DataTable());
+                dsCollectionType.GetMethod("Add")?.Invoke(dataSources, new[] { rds });
+            }
+
+            // Truyền ReportParameter nếu có
+            if (parameters != null && parameters.Count > 0)
+            {
+                Type rpType = FindTypeInAssembly(rdlcAssembly, "ReportParameter")
+                    ?? throw new InvalidOperationException("Không tìm thấy kiểu ReportParameter trong assembly của ReportViewer.");
+
+                Array rpArray = Array.CreateInstance(rpType, parameters.Count);
+                int idx = 0;
+                foreach (var kvp in parameters)
+                {
+                    object rp = Activator.CreateInstance(rpType, kvp.Key, kvp.Value ?? "");
+                    rpArray.SetValue(rp, idx++);
+                }
+
+                Type ienumRpType = typeof(IEnumerable<>).MakeGenericType(rpType);
+                MethodInfo setParamsMethod = localReportType.GetMethod("SetParameters", new[] { ienumRpType });
+                if (setParamsMethod != null)
+                {
+                    setParamsMethod.Invoke(localReport, new object[] { rpArray });
+                }
+            }
+
+            viewerType.GetMethod("RefreshReport", Type.EmptyTypes)?.Invoke(reportViewer, null);
+        }
+
+        /// <summary>
+        /// Render và lưu báo cáo RDLC ra file PDF, Excel (.xlsx/.xls) hoặc Word qua SaveFileDialog.
+        /// </summary>
+        /// <param name="reportViewer">Control ReportViewer đã nạp dữ liệu.</param>
+        /// <param name="format">Định dạng Render RDLC: "PDF", "EXCELOPENXML", "EXCEL", "WORDOPENXML".</param>
+        /// <param name="defaultFileName">Tên file mặc định khi lưu (tự gắn đuôi nếu chưa có).</param>
+        /// <returns>True nếu xuất thành công, False nếu hủy hoặc lỗi.</returns>
+        public static bool ExportRdlc(object reportViewer, string format = "PDF", string defaultFileName = "BaoCao")
+        {
+            if (reportViewer == null)
+                throw new ArgumentNullException(nameof(reportViewer), "ReportViewer không được null.");
+
+            string fmtUpper = (format ?? "PDF").Trim().ToUpperInvariant();
+            string filter;
+            string ext;
+            string actionLabel;
+
+            switch (fmtUpper)
+            {
+                case "EXCELOPENXML":
+                    filter = "Excel Workbook (*.xlsx)|*.xlsx";
+                    ext = ".xlsx";
+                    actionLabel = "xuất file Excel";
+                    break;
+                case "EXCEL":
+                    filter = "Excel 97-2003 (*.xls)|*.xls";
+                    ext = ".xls";
+                    actionLabel = "xuất file Excel";
+                    break;
+                case "WORDOPENXML":
+                    filter = "Word Document (*.docx)|*.docx";
+                    ext = ".docx";
+                    actionLabel = "xuất file Word";
+                    break;
+                default:
+                    fmtUpper = "PDF";
+                    filter = "PDF Document (*.pdf)|*.pdf";
+                    ext = ".pdf";
+                    actionLabel = "xuất file PDF";
+                    break;
+            }
+
+            string safeName = SanitizeFileName(defaultFileName, "BaoCao");
+            if (!safeName.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+            {
+                safeName += ext;
+            }
+
+            using (var sfd = new SaveFileDialog { Filter = filter, FileName = safeName })
+            {
+                if (sfd.ShowDialog() != DialogResult.OK)
+                    return false;
+
+                try
+                {
+                    byte[] bytes = RenderRdlcBytes(reportViewer, fmtUpper);
+                    File.WriteAllBytes(sfd.FileName, bytes);
+                    MessageHelper.Success(actionLabel);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    MessageHelper.Error("Lỗi khi xuất báo cáo RDLC: " + (ex.InnerException?.Message ?? ex.Message));
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gọi LocalReport.Render(format) bằng Reflection và trả về mảng byte của file đã render.
+        /// </summary>
+        public static byte[] RenderRdlcBytes(object reportViewer, string format = "PDF")
+        {
+            if (reportViewer == null)
+                throw new ArgumentNullException(nameof(reportViewer), "ReportViewer không được null.");
+
+            object localReport = reportViewer.GetType().GetProperty("LocalReport")?.GetValue(reportViewer)
+                ?? throw new InvalidOperationException("Đối tượng không có LocalReport.");
+
+            MethodInfo renderMethod = localReport.GetType().GetMethod("Render", new[] { typeof(string) })
+                ?? throw new InvalidOperationException("LocalReport không hỗ trợ phương thức Render(string).");
+
+            object result = renderMethod.Invoke(localReport, new object[] { format ?? "PDF" });
+            return result as byte[] ?? Array.Empty<byte>();
+        }
+
+        private static Type FindTypeInAssembly(Assembly assembly, string shortTypeName)
+        {
+            if (assembly == null) return null;
+            return assembly.GetTypes().FirstOrDefault(t => string.Equals(t.Name, shortTypeName, StringComparison.Ordinal));
+        }
+
+        #endregion
+
+        #region Hỗ trợ Crystal Reports (Reflection - Không phụ thuộc DLL ngoài)
+
+        /// <summary>
+        /// Nạp DataTable và Parameter vào ReportDocument rồi gắn lên CrystalReportViewer bằng Reflection.
+        /// </summary>
+        /// <param name="crystalReportViewer">Control CrystalReportViewer trên Form (có thể null nếu chỉ chuẩn bị ReportDocument).</param>
+        /// <param name="reportDocument">Đối tượng ReportClass / ReportDocument của Crystal Report.</param>
+        /// <param name="data">DataTable dữ liệu nguồn.</param>
+        /// <param name="parameters">Từ điển (Tên tham số → Giá trị) cần truyền vào báo cáo.</param>
+        public static void BindCrystalReport(object crystalReportViewer, object reportDocument, DataTable data,
+            Dictionary<string, object> parameters = null)
+        {
+            if (reportDocument == null)
+                throw new ArgumentNullException(nameof(reportDocument), "ReportDocument không được null.");
+
+            Type docType = reportDocument.GetType();
+            MethodInfo setDataSource = docType.GetMethod("SetDataSource", new[] { typeof(DataTable) })
+                ?? docType.GetMethods().FirstOrDefault(m => m.Name == "SetDataSource" && m.GetParameters().Length == 1);
+
+            setDataSource?.Invoke(reportDocument, new object[] { data ?? new DataTable() });
+
+            if (parameters != null && parameters.Count > 0)
+            {
+                MethodInfo setParam = docType.GetMethod("SetParameterValue", new[] { typeof(string), typeof(object) })
+                    ?? docType.GetMethods().FirstOrDefault(m => m.Name == "SetParameterValue" && m.GetParameters().Length == 2);
+
+                if (setParam != null)
+                {
+                    foreach (var kvp in parameters)
+                    {
+                        setParam.Invoke(reportDocument, new object[] { kvp.Key, kvp.Value ?? "" });
+                    }
+                }
+            }
+
+            if (crystalReportViewer != null)
+            {
+                Type viewerType = crystalReportViewer.GetType();
+                viewerType.GetProperty("ReportSource")?.SetValue(crystalReportViewer, reportDocument);
+                (viewerType.GetMethod("RefreshReport", Type.EmptyTypes) ?? viewerType.GetMethod("Refresh", Type.EmptyTypes))
+                    ?.Invoke(crystalReportViewer, null);
+            }
+        }
+
+        /// <summary>
+        /// Xuất Crystal Report ra file PDF hoặc Excel bằng ExportToDisk thông qua SaveFileDialog.
+        /// </summary>
+        /// <param name="reportDocument">Đối tượng ReportDocument đã nạp dữ liệu.</param>
+        /// <param name="format">Định dạng xuất: "PDF", "EXCEL" (.xls), "EXCELOPENXML" (.xlsx).</param>
+        /// <param name="defaultFileName">Tên file mặc định khi mở SaveFileDialog.</param>
+        public static bool ExportCrystalReport(object reportDocument, string format = "PDF", string defaultFileName = "BaoCao")
+        {
+            if (reportDocument == null)
+                throw new ArgumentNullException(nameof(reportDocument), "ReportDocument không được null.");
+
+            string fmtUpper = (format ?? "PDF").Trim().ToUpperInvariant();
+            string enumName;
+            string filter;
+            string ext;
+            string actionLabel;
+
+            switch (fmtUpper)
+            {
+                case "EXCEL":
+                case "XLS":
+                    enumName = "Excel";
+                    filter = "Excel 97-2003 (*.xls)|*.xls";
+                    ext = ".xls";
+                    actionLabel = "xuất file Excel";
+                    break;
+                case "EXCELOPENXML":
+                case "XLSX":
+                    enumName = "ExcelWorkbook";
+                    filter = "Excel Workbook (*.xlsx)|*.xlsx";
+                    ext = ".xlsx";
+                    actionLabel = "xuất file Excel";
+                    break;
+                default:
+                    enumName = "PortableDocFormat";
+                    filter = "PDF Document (*.pdf)|*.pdf";
+                    ext = ".pdf";
+                    actionLabel = "xuất file PDF";
+                    break;
+            }
+
+            MethodInfo exportMethod = reportDocument.GetType().GetMethods()
+                .FirstOrDefault(m => m.Name == "ExportToDisk" && m.GetParameters().Length == 2
+                    && m.GetParameters()[1].ParameterType == typeof(string))
+                ?? throw new InvalidOperationException("ReportDocument không hỗ trợ phương thức ExportToDisk.");
+
+            Type formatEnumType = exportMethod.GetParameters()[0].ParameterType;
+            object formatEnumVal = Enum.Parse(formatEnumType, enumName, ignoreCase: true);
+
+            string safeName = SanitizeFileName(defaultFileName, "BaoCao");
+            if (!safeName.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                safeName += ext;
+
+            using (var sfd = new SaveFileDialog { Filter = filter, FileName = safeName })
+            {
+                if (sfd.ShowDialog() != DialogResult.OK)
+                    return false;
+
+                try
+                {
+                    exportMethod.Invoke(reportDocument, new object[] { formatEnumVal, sfd.FileName });
+                    MessageHelper.Success(actionLabel);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    MessageHelper.Error("Lỗi khi xuất Crystal Report: " + (ex.InnerException?.Message ?? ex.Message));
+                    return false;
+                }
+            }
+        }
+
+        #endregion
     }
 }

@@ -64,6 +64,9 @@ namespace ExamHelper.Validation
 
         /// <summary>Thông báo lỗi tùy chỉnh. Nếu null, hệ thống sẽ tự sinh thông báo mặc định.</summary>
         public string CustomMessage { get; set; }
+
+        /// <summary>Control tham chiếu phụ (ví dụ: DateTimePicker Ngày vào làm dùng cho AgeRangeAtDate).</summary>
+        public Control ReferenceControl { get; set; }
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using System;
 using System.Data;
 using System.Windows.Forms;
+using ExamHelper.Database;
 
 namespace ExamHelper.Binding
 {
@@ -26,28 +27,77 @@ namespace ExamHelper.Binding
             if (data == null)
                 throw new ArgumentNullException(nameof(data), "DataTable không được null.");
 
+            // Nếu DataTable hoàn toàn trống cột (thường do truy vấn SQL bị lỗi), tránh làm sập Form_Load
+            if (data.Columns.Count == 0)
+            {
+                combo.DataSource = null;
+                combo.Items.Clear();
+                return;
+            }
+
             if (!data.Columns.Contains(valueMember))
                 throw new ArgumentException($"Cột valueMember '{valueMember}' không tồn tại trong DataTable.");
             if (!data.Columns.Contains(displayMember))
                 throw new ArgumentException($"Cột displayMember '{displayMember}' không tồn tại trong DataTable.");
 
-            // Tạo bản sao để tránh lỗi chia sẻ DataSource giữa nhiều ComboBox
-            DataTable copy = data.Copy();
+            ApplyBinding(combo, data.Copy(), valueMember, displayMember);
+        }
 
-            // Đảm bảo ComboBox có BindingContext để DataSource được nạp Items ngay lập tức
-            if (combo.BindingContext == null)
+        private static void ResolveDefaultColumns(DataTable data, ref string valueMember, ref string displayMember)
+        {
+            if (string.IsNullOrWhiteSpace(valueMember))
+                valueMember = data.Columns.Count > 0 ? data.Columns[0].ColumnName : "Id";
+            if (string.IsNullOrWhiteSpace(displayMember))
+                displayMember = data.Columns.Count >= 2 ? data.Columns[1].ColumnName : valueMember;
+        }
+
+        /// <summary>
+        /// Gán dữ liệu từ DataTable vào ComboBox, tự nhận diện cột 1 làm ValueMember và cột 2 làm DisplayMember
+        /// (nếu bảng chỉ có 1 cột thì dùng chính cột đó cho cả hai).
+        /// </summary>
+        public static void Bind(ComboBox combo, DataTable data)
+        {
+            if (combo == null)
+                throw new ArgumentNullException(nameof(combo), "ComboBox không được null.");
+            if (data == null)
+                throw new ArgumentNullException(nameof(data), "DataTable không được null.");
+
+            if (data.Columns.Count == 0)
             {
-                combo.BindingContext = new BindingContext();
+                combo.DataSource = null;
+                combo.Items.Clear();
+                return;
             }
 
-            // Thiết lập DisplayMember & ValueMember TRƯỚC khi gán DataSource
-            // để tránh SelectedIndexChanged kích hoạt khi ValueMember chưa sẵn sàng
-            combo.DisplayMember = displayMember;
-            combo.ValueMember = valueMember;
-            combo.DataSource = copy;
+            string valCol = null;
+            string dispCol = null;
+            ResolveDefaultColumns(data, ref valCol, ref dispCol);
+            Bind(combo, data, valCol, dispCol);
+        }
 
-            if (combo.Items.Count > 0)
-                combo.SelectedIndex = 0;
+        /// <summary>
+        /// Thực thi trực tiếp câu lệnh SQL và nạp dữ liệu vào ComboBox.
+        /// Nếu bỏ trống valueMember/displayMember sẽ tự lấy cột 1 làm Value và cột 2 làm Display.
+        /// </summary>
+        public static void Bind(ComboBox combo, string sql, string valueMember = null, string displayMember = null, string dbName = "default")
+        {
+            DataTable dt = DbHelper.GetDataTable(sql, dbName);
+            if (!string.IsNullOrWhiteSpace(valueMember) && !string.IsNullOrWhiteSpace(displayMember))
+                Bind(combo, dt, valueMember, displayMember);
+            else
+                Bind(combo, dt);
+        }
+
+        /// <summary>
+        /// Thực thi trực tiếp câu lệnh SQL và nạp vào ComboBox kèm dòng "Tất cả" ở đầu danh sách.
+        /// Nếu bỏ trống valueMember/displayMember sẽ tự lấy cột 1 làm Value và cột 2 làm Display.
+        /// </summary>
+        public static void BindWithAll(ComboBox combo, string sql, string allText = "-- Tất cả --", object allValue = null,
+            string valueMember = null, string displayMember = null, string dbName = "default")
+        {
+            DataTable dt = DbHelper.GetDataTable(sql, dbName);
+            ResolveDefaultColumns(dt, ref valueMember, ref displayMember);
+            BindWithAll(combo, dt, valueMember, displayMember, allText, allValue);
         }
 
         /// <summary>
@@ -69,13 +119,24 @@ namespace ExamHelper.Binding
             if (data == null)
                 throw new ArgumentNullException(nameof(data), "DataTable không được null.");
 
-            if (!data.Columns.Contains(valueMember))
-                throw new ArgumentException($"Cột valueMember '{valueMember}' không tồn tại trong DataTable.");
-            if (!data.Columns.Contains(displayMember))
-                throw new ArgumentException($"Cột displayMember '{displayMember}' không tồn tại trong DataTable.");
+            DataTable clone;
+            if (data.Columns.Count == 0)
+            {
+                // Nếu DataTable trống cột do lỗi truy vấn, tạo bảng tối thiểu chỉ chứa dòng "Tất cả" để Form không bị crash
+                clone = new DataTable();
+                clone.Columns.Add(valueMember, typeof(string));
+                if (!string.Equals(displayMember, valueMember, StringComparison.OrdinalIgnoreCase))
+                    clone.Columns.Add(displayMember, typeof(string));
+            }
+            else
+            {
+                if (!data.Columns.Contains(valueMember))
+                    throw new ArgumentException($"Cột valueMember '{valueMember}' không tồn tại trong DataTable.");
+                if (!data.Columns.Contains(displayMember))
+                    throw new ArgumentException($"Cột displayMember '{displayMember}' không tồn tại trong DataTable.");
 
-            // Clone cấu trúc và sao chép dữ liệu
-            DataTable clone = data.Copy();
+                clone = data.Copy();
+            }
 
             // Cho phép tất cả các cột trong bản sao nhận DBNull để tránh NoNullAllowedException khi tạo dòng "Tất cả"
             foreach (DataColumn col in clone.Columns)
@@ -113,7 +174,28 @@ namespace ExamHelper.Binding
             allRow[displayMember] = allText;
             clone.Rows.InsertAt(allRow, 0);
 
-            // Đảm bảo ComboBox có BindingContext để DataSource được nạp Items ngay lập tức
+            ApplyBinding(combo, clone, valueMember, displayMember);
+        }
+
+        /// <summary>
+        /// Nạp danh sách các mục tĩnh vào ComboBox (ví dụ: "Tất cả", "Nam", "Nữ") và chọn sẵn mục đầu tiên.
+        /// </summary>
+        public static void BindItems(ComboBox combo, params object[] items)
+        {
+            if (combo == null)
+                throw new ArgumentNullException(nameof(combo), "ComboBox không được null.");
+
+            combo.DataSource = null;
+            combo.Items.Clear();
+            if (items != null && items.Length > 0)
+            {
+                combo.Items.AddRange(items);
+                combo.SelectedIndex = 0;
+            }
+        }
+
+        private static void ApplyBinding(ComboBox combo, DataTable source, string valueMember, string displayMember)
+        {
             if (combo.BindingContext == null)
             {
                 combo.BindingContext = new BindingContext();
@@ -122,7 +204,7 @@ namespace ExamHelper.Binding
             // Thiết lập DisplayMember & ValueMember TRƯỚC DataSource
             combo.DisplayMember = displayMember;
             combo.ValueMember = valueMember;
-            combo.DataSource = clone;
+            combo.DataSource = source;
 
             if (combo.Items.Count > 0)
                 combo.SelectedIndex = 0;
@@ -157,7 +239,7 @@ namespace ExamHelper.Binding
 
         /// <summary>
         /// Kiểm tra xem ComboBox có đang chọn dòng "Tất cả" hay không.
-        /// Chỉ có ý nghĩa với ComboBox được bind bằng <see cref="BindWithAll"/>.
+        /// Chỉ có ý nghĩa với ComboBox được bind bằng <see cref="BindWithAll(ComboBox, DataTable, string, string, string, object)"/>.
         /// </summary>
         /// <param name="combo">ComboBox cần kiểm tra.</param>
         /// <returns>True nếu đang chọn dòng đầu tiên (dòng "Tất cả"), ngược lại False.</returns>
@@ -186,12 +268,67 @@ namespace ExamHelper.Binding
                 {
                     Type colType = dt.Columns[combo.ValueMember].DataType;
                     combo.SelectedValue = Convert.ChangeType(value, colType);
+
+                    // Fallback cho cột CHAR/NCHAR có khoảng trắng thừa hoặc khác chữ hoa/thường
+                    if (colType == typeof(string) && (combo.SelectedIndex < 0 || combo.SelectedValue == null))
+                    {
+                        string target = value.ToString().Trim();
+                        for (int i = 0; i < dt.Rows.Count; i++)
+                        {
+                            string rowVal = dt.Rows[i][combo.ValueMember]?.ToString()?.Trim();
+                            if (string.Equals(rowVal, target, StringComparison.OrdinalIgnoreCase))
+                            {
+                                combo.SelectedIndex = i;
+                                break;
+                            }
+                        }
+                    }
                     return;
                 }
             }
             catch { }
 
-            combo.SelectedValue = value;
+            try
+            {
+                combo.SelectedValue = value;
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Chọn mục trong ComboBox theo chuỗi hiển thị (DisplayMember hoặc Items Text), bỏ qua khoảng trắng thừa và hoa/thường.
+        /// </summary>
+        public static bool SelectByText(ComboBox combo, string text)
+        {
+            if (combo == null || string.IsNullOrWhiteSpace(text))
+                return false;
+
+            string target = text.Trim();
+
+            if (combo.DataSource is DataTable dt && !string.IsNullOrEmpty(combo.DisplayMember) && dt.Columns.Contains(combo.DisplayMember))
+            {
+                for (int i = 0; i < dt.Rows.Count; i++)
+                {
+                    string displayVal = dt.Rows[i][combo.DisplayMember]?.ToString()?.Trim();
+                    if (string.Equals(displayVal, target, StringComparison.OrdinalIgnoreCase))
+                    {
+                        combo.SelectedIndex = i;
+                        return true;
+                    }
+                }
+            }
+
+            for (int i = 0; i < combo.Items.Count; i++)
+            {
+                string itemText = combo.GetItemText(combo.Items[i])?.Trim();
+                if (string.Equals(itemText, target, StringComparison.OrdinalIgnoreCase))
+                {
+                    combo.SelectedIndex = i;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

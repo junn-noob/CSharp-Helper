@@ -1,7 +1,9 @@
 using System;
 using System.Data;
+using System.Data.Common;
 using System.Drawing;
 using System.Windows.Forms;
+using ExamHelper.Database;
 
 namespace ExamHelper.Binding
 {
@@ -72,7 +74,123 @@ namespace ExamHelper.Binding
             if (data == null)
                 throw new ArgumentNullException(nameof(data), "DataTable không được null.");
 
+            if (grid.BindingContext == null)
+                grid.BindingContext = new BindingContext();
+
+            if (grid.Columns.Count == 0)
+                grid.AutoGenerateColumns = true;
+
             grid.DataSource = data;
+        }
+
+        /// <summary>
+        /// Chạy trực tiếp câu lệnh SQL query và đổ toàn bộ dữ liệu lên DataGridView
+        /// (tự động căn lề/định dạng ngày N0 và đặt chế độ ReadOnly nếu không truyền danh sách cột riêng).
+        /// </summary>
+        public static void Bind(DataGridView grid, string sql, params GridColumn[] columns)
+        {
+            if (grid == null)
+                throw new ArgumentNullException(nameof(grid), "DataGridView không được null.");
+
+            DataTable dt = DbHelper.GetDataTable(sql);
+            BindQueryInternal(grid, dt, columns, readOnly: true);
+        }
+
+        /// <summary>
+        /// Chạy câu lệnh SQL kết hợp điều kiện <see cref="FilterBuilder"/> và ORDER BY rồi đổ dữ liệu lên DataGridView.
+        /// </summary>
+        public static void Bind(DataGridView grid, string sql, FilterBuilder filter, string orderBy = null, params GridColumn[] columns)
+        {
+            if (grid == null)
+                throw new ArgumentNullException(nameof(grid), "DataGridView không được null.");
+
+            DataTable dt = DbHelper.GetDataTable(sql, filter, orderBy);
+            BindQueryInternal(grid, dt, columns, readOnly: true);
+        }
+
+        /// <summary>
+        /// Chạy câu lệnh SQL có tham số (<see cref="DbParameter"/>) và đổ dữ liệu lên DataGridView.
+        /// </summary>
+        public static void BindSql(DataGridView grid, string sql, params DbParameter[] parameters)
+        {
+            BindSql(grid, sql, parameters, null);
+        }
+
+        /// <summary>
+        /// Chạy câu lệnh SQL có tham số, tùy chọn tên kết nối / connectionString riêng và danh sách cột hiển thị.
+        /// </summary>
+        public static void BindSql(DataGridView grid, string sql, DbParameter[] parameters, string connection, params GridColumn[] columns)
+        {
+            if (grid == null)
+                throw new ArgumentNullException(nameof(grid), "DataGridView không được null.");
+
+            DataTable dt = string.IsNullOrWhiteSpace(connection)
+                ? DbHelper.GetDataTable(sql, parameters ?? Array.Empty<DbParameter>())
+                : DbHelper.GetDataTable(sql, connection, parameters ?? Array.Empty<DbParameter>());
+            BindQueryInternal(grid, dt, columns, readOnly: true);
+        }
+
+        internal static void BindFormatted(DataGridView grid, DataTable data, bool readOnly = true)
+        {
+            BindQueryInternal(grid, data, null, readOnly);
+        }
+
+        private static void BindQueryInternal(DataGridView grid, DataTable data, GridColumn[] columns, bool readOnly)
+        {
+            if (columns != null && columns.Length > 0)
+            {
+                Bind(grid, data, columns);
+            }
+            else
+            {
+                grid.Columns.Clear();
+                grid.AutoGenerateColumns = true;
+                Bind(grid, data);
+                ApplyAutoFormatting(grid, data);
+            }
+
+            if (readOnly)
+            {
+                SetReadOnly(grid);
+            }
+        }
+
+        private static void ApplyAutoFormatting(DataGridView grid, DataTable data)
+        {
+            if (grid == null || data == null || grid.Columns.Count == 0)
+                return;
+
+            foreach (DataGridViewColumn gCol in grid.Columns)
+            {
+                string field = !string.IsNullOrEmpty(gCol.DataPropertyName) ? gCol.DataPropertyName : gCol.Name;
+                if (string.IsNullOrEmpty(field) || !data.Columns.Contains(field))
+                    continue;
+
+                Type colType = data.Columns[field].DataType;
+                if (colType == typeof(DateTime))
+                {
+                    gCol.DefaultCellStyle.Format = "dd/MM/yyyy";
+                    gCol.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                }
+                else if (colType == typeof(decimal) || colType == typeof(int) || colType == typeof(long))
+                {
+                    gCol.DefaultCellStyle.Format = "N0";
+                    gCol.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                }
+                else if (colType == typeof(double) || colType == typeof(float))
+                {
+                    gCol.DefaultCellStyle.Format = "0.##";
+                    gCol.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                }
+                else if (colType == typeof(bool))
+                {
+                    gCol.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                }
+            }
+
+            grid.AutoSizeColumnsMode = grid.Columns.Count <= 8
+                ? DataGridViewAutoSizeColumnsMode.Fill
+                : DataGridViewAutoSizeColumnsMode.DisplayedCells;
         }
 
         /// <summary>
@@ -89,6 +207,9 @@ namespace ExamHelper.Binding
                 throw new ArgumentNullException(nameof(grid), "DataGridView không được null.");
             if (data == null)
                 throw new ArgumentNullException(nameof(data), "DataTable không được null.");
+
+            if (grid.BindingContext == null)
+                grid.BindingContext = new BindingContext();
 
             grid.AutoGenerateColumns = false;
             grid.Columns.Clear();
@@ -133,22 +254,70 @@ namespace ExamHelper.Binding
             grid.DataSource = data;
         }
 
+        private static DataGridViewRow GetActiveRow(DataGridView grid)
+        {
+            if (grid == null || grid.Rows.Count == 0)
+                return null;
+
+            if (grid.SelectedRows.Count > 0)
+            {
+                var sel = grid.SelectedRows[0];
+                return sel.IsNewRow ? null : sel;
+            }
+
+            if (grid.IsHandleCreated && grid.SelectionMode == DataGridViewSelectionMode.FullRowSelect)
+                return null;
+
+            if (grid.CurrentRow != null && !grid.CurrentRow.IsNewRow)
+                return grid.CurrentRow;
+
+            return null;
+        }
+
+        private static string FindGridColumnKey(DataGridView grid, string columnName)
+        {
+            if (grid == null || string.IsNullOrWhiteSpace(columnName))
+                return null;
+            if (grid.Columns.Contains(columnName))
+                return columnName;
+
+            foreach (DataGridViewColumn col in grid.Columns)
+            {
+                if (string.Equals(col.DataPropertyName, columnName, StringComparison.OrdinalIgnoreCase))
+                    return col.Name;
+            }
+            return null;
+        }
+
         /// <summary>
-        /// Lấy giá trị từ một cột cụ thể của dòng đang chọn trong DataGridView.
+        /// Lấy giá trị từ một cột cụ thể của dòng đang chọn trong DataGridView
+        /// (hỗ trợ cả cột ẩn chỉ có trong DataTable nguồn như MaPB, GioiTinh).
         /// </summary>
         /// <typeparam name="T">Kiểu dữ liệu cần trả về.</typeparam>
         /// <param name="grid">DataGridView cần lấy giá trị.</param>
-        /// <param name="columnName">Tên cột (DataPropertyName) cần lấy giá trị.</param>
+        /// <param name="columnName">Tên cột (Name, DataPropertyName hoặc tên cột trong DataTable) cần lấy giá trị.</param>
         /// <returns>Giá trị ép kiểu về T, hoặc giá trị mặc định nếu không có dòng nào được chọn.</returns>
         public static T GetSelectedValue<T>(DataGridView grid, string columnName)
         {
-            if (grid == null || grid.CurrentRow == null || grid.CurrentRow.IsNewRow || !grid.Columns.Contains(columnName))
+            var row = GetActiveRow(grid);
+            if (row == null || string.IsNullOrWhiteSpace(columnName))
                 return default(T);
 
             try
             {
-                object value = grid.CurrentRow.Cells[columnName].Value;
-                return ExamHelper.Utilities.DataHelper.ChangeType<T>(value);
+                string colKey = FindGridColumnKey(grid, columnName);
+                if (colKey != null)
+                {
+                    object value = row.Cells[colKey].Value;
+                    return ExamHelper.Utilities.DataHelper.ChangeType<T>(value);
+                }
+
+                if (row.DataBoundItem is DataRowView drv && drv.DataView?.Table?.Columns.Contains(columnName) == true)
+                {
+                    return ExamHelper.Utilities.DataHelper.ChangeType<T>(drv.Row[columnName]);
+                }
+
+                return default(T);
             }
             catch
             {
@@ -166,21 +335,16 @@ namespace ExamHelper.Binding
         /// <returns>Giá trị khóa ép kiểu về T, hoặc giá trị mặc định nếu không có dòng nào được chọn.</returns>
         public static T GetSelectedKeyValue<T>(DataGridView grid, string keyColumnName = null)
         {
-            if (grid == null || grid.CurrentRow == null || grid.CurrentRow.IsNewRow || grid.Columns.Count == 0)
+            var row = GetActiveRow(grid);
+            if (row == null || grid.Columns.Count == 0)
                 return default(T);
 
             try
             {
-                object value;
-                if (!string.IsNullOrEmpty(keyColumnName) && grid.Columns.Contains(keyColumnName))
-                {
-                    value = grid.CurrentRow.Cells[keyColumnName].Value;
-                }
-                else
-                {
-                    value = grid.CurrentRow.Cells[0].Value;
-                }
+                if (!string.IsNullOrEmpty(keyColumnName))
+                    return GetSelectedValue<T>(grid, keyColumnName);
 
+                object value = row.Cells[0].Value;
                 return ExamHelper.Utilities.DataHelper.ChangeType<T>(value);
             }
             catch
@@ -197,12 +361,13 @@ namespace ExamHelper.Binding
         /// <returns>DataRowView của dòng đang chọn, hoặc null nếu không có dòng nào được chọn.</returns>
         public static DataRowView GetSelectedRow(DataGridView grid)
         {
-            if (grid == null || grid.CurrentRow == null || grid.CurrentRow.IsNewRow)
+            var row = GetActiveRow(grid);
+            if (row == null)
                 return null;
 
             try
             {
-                return grid.CurrentRow.DataBoundItem as DataRowView;
+                return row.DataBoundItem as DataRowView;
             }
             catch
             {
@@ -227,10 +392,66 @@ namespace ExamHelper.Binding
         /// <returns>True nếu có ít nhất một dòng được chọn, ngược lại False.</returns>
         public static bool HasSelection(DataGridView grid)
         {
+            return GetActiveRow(grid) != null;
+        }
+
+        /// <summary>
+        /// Bỏ chọn toàn bộ dòng và xóa CurrentCell trên DataGridView.
+        /// Dùng trong nút Làm mới để cho phép click lại dòng đầu tiên kích hoạt SelectionChanged.
+        /// </summary>
+        public static void ClearSelection(DataGridView grid)
+        {
             if (grid == null)
+                return;
+
+            grid.ClearSelection();
+            try
+            {
+                grid.CurrentCell = null;
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Tìm và chọn dòng trên DataGridView theo tên cột và giá trị (rất hữu ích để giữ nguyên vị trí dòng sau khi Sửa).
+        /// </summary>
+        public static bool SelectRowByValue(DataGridView grid, string columnName, object value)
+        {
+            if (grid == null || grid.Rows.Count == 0 || string.IsNullOrWhiteSpace(columnName) || value == null)
                 return false;
 
-            return grid.CurrentRow != null && grid.Rows.Count > 0 && !grid.CurrentRow.IsNewRow;
+            string colKey = FindGridColumnKey(grid, columnName);
+            if (colKey == null)
+                return false;
+
+            string target = value.ToString().Trim();
+            foreach (DataGridViewRow row in grid.Rows)
+            {
+                if (row.IsNewRow) continue;
+                string cellVal = row.Cells[colKey].Value?.ToString()?.Trim();
+                if (string.Equals(cellVal, target, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Đặt CurrentCell TRƯỚC row.Selected để CurrentRow cập nhật đúng trước khi SelectionChanged kích hoạt
+                    foreach (DataGridViewCell cell in row.Cells)
+                    {
+                        if (cell.Visible)
+                        {
+                            if (grid.CurrentCell != cell)
+                                grid.CurrentCell = cell;
+                            break;
+                        }
+                    }
+
+                    if (!row.Selected)
+                    {
+                        grid.ClearSelection();
+                        row.Selected = true;
+                    }
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

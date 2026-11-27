@@ -14,6 +14,8 @@ namespace ExamHelper.Database
     /// </summary>
     public class FilterBuilder
     {
+        private readonly DbDialect _dialect;
+
         private readonly List<string> _conditions =
             new List<string>();
 
@@ -22,11 +24,29 @@ namespace ExamHelper.Database
 
         private int _paramIndex = 0;
 
+        /// <summary>Khởi tạo bộ lọc theo loại CSDL chỉ định (mặc định SQL Server).</summary>
+        public FilterBuilder(DbDialect dialect = DbDialect.SqlServer)
+        {
+            _dialect = dialect;
+        }
+
         #region Factory
 
         public static FilterBuilder New()
         {
-            return new FilterBuilder();
+            return new FilterBuilder(DbDialect.SqlServer);
+        }
+
+        /// <summary>Khởi tạo bộ lọc theo loại CSDL cụ thể (MySQL, SQLite, PostgreSQL, SQL Server...).</summary>
+        public static FilterBuilder New(DbDialect dialect)
+        {
+            return new FilterBuilder(dialect);
+        }
+
+        /// <summary>Khởi tạo bộ lọc tự động nhận diện loại CSDL đang kết nối của DbHelper.</summary>
+        public static FilterBuilder ForConnection(string dbName = "default")
+        {
+            return new FilterBuilder(DbHelper.TryGetDialect(dbName));
         }
 
         #endregion
@@ -34,13 +54,10 @@ namespace ExamHelper.Database
         #region Định dạng tên cột
 
         /// <summary>
-        /// Định dạng tên cột thành identifier SQL.
-        /// Ví dụ:
-        /// nv.MaPB  -> [nv].[MaPB]
-        /// HoTen    -> [HoTen]
-        /// [nv].[MaPB] -> [nv].[MaPB]
+        /// Định dạng tên cột thành identifier SQL đúng cú pháp theo từng hệ quản trị CSDL.
+        /// Ví dụ SQL Server: nv.MaPB -> [nv].[MaPB]; MySQL: `nv`.`MaPB`; SQLite/PostgreSQL: "nv"."MaPB".
         /// </summary>
-        private static string FormatColumn(string column)
+        private string FormatColumn(string column)
         {
             if (string.IsNullOrWhiteSpace(column))
             {
@@ -53,7 +70,7 @@ namespace ExamHelper.Database
 
             for (int i = 0; i < parts.Length; i++)
             {
-                string part = parts[i].Trim().Trim('[', ']');
+                string part = parts[i].Trim().Trim('[', ']', '`', '"');
 
                 if (string.IsNullOrWhiteSpace(part))
                 {
@@ -65,6 +82,8 @@ namespace ExamHelper.Database
                 // Không cho phép chèn biểu thức SQL vào tên cột.
                 if (part.Contains("[") ||
                     part.Contains("]") ||
+                    part.Contains("`") ||
+                    part.Contains("\"") ||
                     part.Contains(";") ||
                     part.Contains("--") ||
                     part.Contains("/*") ||
@@ -75,7 +94,7 @@ namespace ExamHelper.Database
                         nameof(column));
                 }
 
-                parts[i] = $"[{part}]";
+                parts[i] = DbHelper.QuoteIdentifier(part, _dialect);
             }
 
             return string.Join(".", parts);
@@ -474,9 +493,10 @@ namespace ExamHelper.Database
             if (combo == null || combo.SelectedIndex <= 0)
                 return this;
 
+            object val = combo.DataSource != null ? combo.SelectedValue : combo.SelectedItem;
             return Equal(
                 column,
-                combo.SelectedValue,
+                val,
                 paramName);
         }
 
@@ -520,7 +540,7 @@ namespace ExamHelper.Database
         {
             if (configure == null) return this;
 
-            var sub = new FilterBuilder { _paramIndex = this._paramIndex };
+            var sub = new FilterBuilder(_dialect) { _paramIndex = this._paramIndex };
             configure(sub);
 
             if (sub._conditions.Count > 0)

@@ -1,75 +1,74 @@
-# HƯỚNG DẪN CHI TIẾT: MODULE VALIDATION (KIỂM TRA DỮ LIỆU)
+# 03. MODULE VALIDATION (KIỂM TRA DỮ LIỆU ĐẦU VÀO)
+
 > **Namespace:** `ExamHelper.Validation`  
-> **Các lớp chính:** `Validator`, `ValidationRule`, `ValidationResult`
+> **Thành phần:** `ValidationType` (enum), `ValidationRule`, `ValidationResult`, `Validator`
 
 ---
 
-## 1. Mục đích & Khi nào dùng
-- Đề thi WinForms luôn chiếm **1.5 đến 2.0 điểm** cho phần kiểm tra dữ liệu đầu vào.
-- Nếu viết kiểm tra bằng tay bằng các lệnh `if/else`, code sẽ rất dài, rối và dễ sót trường hợp biên.
-- `Validator` cung cấp cơ chế kiểm tra theo chuỗi (Fluent API) cực kỳ ngắn gọn.
-- Khi gặp lỗi đầu tiên, hàm tự động dừng, trả về thông báo lỗi tiếng Việt rõ ràng và **trả về chính xác Control đang bị sai** để bạn đưa con trỏ chuột về đó (`FocusControl`).
+## 1. Kiểu cấu trúc & Kết quả (`ValidationRule`, `ValidationResult`)
+
+- **`ValidationResult`:**
+  - `IsValid` (`bool`): `true` nếu qua toàn bộ quy tắc.
+  - `ErrorMessage` (`string`): nội dung thông báo lỗi ở quy tắc đầu tiên bị sai.
+  - `ErrorControl` (`Control`): control gây lỗi để gọi `FormHelper.FocusControl(result.ErrorControl)`.
+  - `Success()`, `Fail(message, control)`.
 
 ---
 
-## 2. Danh sách các quy tắc kiểm tra (Rules)
+## 2. Danh sách đầy đủ các quy tắc kiểm tra (`Validator`)
 
-| Quy tắc | Cú pháp khai báo | Ý nghĩa & Ví dụ |
-|---|---|---|
-| **Bắt buộc nhập** | `Validator.Required(ctrl, name)` | Không được để trống. |
-| **Định dạng Regex** | `Validator.Pattern(ctrl, name, regex, msg)` | Kiểm tra theo định dạng (VD: Mã NV `^NV\d{3}$`, Email, SĐT). |
-| **Khoảng số nguyên** | `Validator.IntRange(ctrl, name, min, max)` | Kiểm tra số nguyên trong đoạn `[min, max]`. |
-| **Khoảng số thực** | `Validator.DecimalRange(ctrl, name, min, max)` | Kiểm tra số thực (hệ số lương, điểm số, giá tiền). |
-| **Khoảng ngày tháng** | `Validator.DateRange(ctrl, name, minDate, maxDate)` | Kiểm tra ngày nằm trong khoảng. |
-| **Khoảng tuổi hiện tại** | `Validator.AgeRange(ctrl, name, minAge, maxAge)` | Tính tuổi tại ngày hiện tại. |
-| **Khoảng tuổi tại ngày mốc** | `Validator.AgeRangeAtDate(ctrl, name, minAge, maxAge)` | **Đặc sản đề thi:** Tính tuổi tại một ngày mốc cụ thể (như Ngày vào làm, Ngày nhập học). |
-| **Quy tắc tùy biến** | `Validator.Custom(ctrl, name, Func<string, bool>, msg)` | Tự viết hàm kiểm tra logic riêng. |
-| **Tính tuổi chính xác** | `Validator.CalculateAge(birthDate, refDate)` | Hàm tính tuổi chuẩn xác theo năm và ngày sinh nhật. |
+| Phương thức | Chức năng & Hành vi chi tiết |
+|---|---|
+| `Required(ctrl, fieldName, msg = null)` | Kiểm tra chuỗi nhập không null/toàn khoảng trắng. |
+| `Pattern(ctrl, fieldName, regex, msg = null)` | Kiểm tra khớp biểu thức chính quy sau khi `.Trim()` khoảng trắng hai đầu (chỉ kiểm tra khi có giá trị, ghép với `Required` nếu bắt buộc nhập). |
+| `MinLength(ctrl, fieldName, min, msg = null)` | Độ dài tối thiểu `>= min`. |
+| `MaxLength(ctrl, fieldName, max, msg = null)` | Độ dài tối đa `<= max`. |
+| `IntRange(ctrl, fieldName, min, max, msg = null)` | Kiểm tra số nguyên hợp lệ trong `[min, max]`. |
+| `DecimalRange(ctrl, fieldName, min, max, msg = null)` | Phân tích số thực qua `DataHelper.TryParseDecimal` (chấp nhận cả `"2,34"` và `"2.34"`) rồi kiểm trong `[min, max]`. |
+| `DateRange(ctrl, fieldName, min, max, msg = null)` | Kiểm tra ngày (`.Date`) nằm trong `[min.Date, max.Date]`. |
+| `NotFutureDate(ctrl, fieldName, msg = null)` | Ngày không vượt quá `DateTime.Today`. |
+| `AgeRange(ctrl, fieldName, minAge, maxAge, msg = null)` | Tính tuổi tại `DateTime.Today` theo đúng ngày sinh nhật (`CalculateAge`). |
+| `AgeRangeAtDate(ctrl, fieldName, minAge, maxAge, msg = null)` | Tính tuổi tại ngày tham chiếu truyền vào `ValidateAll(referenceDate, ...)`. |
+| `AgeRangeAtDate(birthDateControl, referenceDateControl, fieldName, minAge, maxAge, msg = null)` | Tính tuổi của `birthDateControl` tại ngày đang chọn trên `referenceDateControl` (ví dụ `dtpNgayVaoLam`), không cần truyền lại ở đầu `ValidateAll`. |
+| `DateBeforeOrEqual(ctrl, targetDateControl, fieldName, msg = null)` | Kiểm tra `ctrl.Date <= targetDateControl.Date` (ví dụ Ngày lập <= Ngày giao). |
+| `Selected(cmb, fieldName, msg = null)` | Kiểm tra `ComboBox` đã chọn hợp lệ (chặn chưa chọn, rỗng, hoặc đang ở index `0` với giá trị `"0"` / `"-1"`). |
+| `Custom(ctrl, fieldName, Func<string, bool> check, msg = null)` | Quy tắc logic tùy chỉnh bất kỳ. |
 
 ---
 
-## 3. Quy trình thực hiện kiểm tra với `ValidateAll`
+## 3. Kiểm tra tự động theo Schema CSDL (`Validator.FromSchema`)
 
-Hàm `Validator.ValidateAll(...)` nhận vào danh sách các quy tắc và thực hiện kiểm tra tuần tự từ trên xuống dưới:
+Thay vì viết tay toàn bộ rule `Required` và `MaxLength` cho mọi ô nhập liệu, bạn có thể dùng `FromSchema` kết hợp thêm các rule nghiệp vụ đặc thù:
 
 ```csharp
-var result = Validator.ValidateAll(
-    // (Tùy chọn) Truyền ngày mốc nếu đề yêu cầu tính tuổi tại ngày vào làm
-    dtpNgayVaoLam.Value,
-
-    Validator.Required(txtMaNV, "Mã nhân viên"),
-    Validator.Pattern(txtMaNV, "Mã nhân viên", @"^NV\d{3}$", "Mã phải có dạng NV001!"),
-    Validator.Required(txtHoTen, "Họ tên"),
-    Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m, "Hệ số lương phải từ 2.34 đến 8.0!"),
-    Validator.AgeRangeAtDate(dtpNgaySinh, "Tuổi nhân viên", 18, 100, "Nhân viên phải đủ 18 tuổi tính đến ngày vào làm!")
-);
-
-// Xử lý kết quả chỉ trong 4 dòng:
-if (!result.IsValid)
-{
-    MessageHelper.Warning(result.ErrorMessage);
-    FormHelper.FocusControl(result.ErrorControl); // Tự động trỏ chuột vào ô sai
-    return;
-}
+ValidationResult FromSchema(Control container, DataTable schemaTable, params ValidationRule[] extraRules);
 ```
 
+**Cơ chế của `FromSchema`:**
+1. Duyệt các control nhập liệu trong `container` (bỏ qua `CheckBox`, `RadioButton`, `DateTimePicker`).
+2. Khớp tên control với cột trong `schemaTable` (bỏ qua cột `AutoIncrement`).
+3. Tự kiểm tra:
+   - `!dc.AllowDBNull` → kiểm tra `Required` (hoặc `Selected` với `ComboBox`).
+   - `dc.DataType == typeof(string)` & `dc.MaxLength > 0` → kiểm tra `MaxLength`.
+   - Kiểu `int`/`short`/`long` → kiểm tra phải là số nguyên hợp lệ (nếu có nhập).
+   - Kiểu `decimal`/`double`/`float` → kiểm tra phải là số hợp lệ (nếu có nhập).
+4. Cuối cùng chạy tuần tự toàn bộ `extraRules` truyền kèm.
+
 ---
 
-## 4. Các ví dụ áp dụng thường gặp trong đề thi
-
-### Ví dụ 1: Đề thi Quản lý Sinh viên
-- Mã SV bắt buộc, dạng `SV` + 4 số (`^SV\d{4}$`).
-- Họ tên không để trống.
-- Điểm trung bình từ `0.0` đến `10.0`.
-- Tuổi sinh viên từ `18` đến `30`.
+## 4. Hàm tính tuổi & Ví dụ sử dụng
 
 ```csharp
-var val = Validator.ValidateAll(
-    Validator.Required(txtMaSV, "Mã sinh viên"),
-    Validator.Pattern(txtMaSV, "Mã sinh viên", @"^SV\d{4}$", "Mã sinh viên phải có dạng SV0001"),
-    Validator.Required(txtHoTen, "Họ tên sinh viên"),
-    Validator.DecimalRange(txtDiemTB, "Điểm trung bình", 0.0m, 10.0m),
-    Validator.AgeRange(dtpNgaySinh, "Tuổi sinh viên", 18, 30)
+// Tính tuổi chính xác theo ngày và tháng sinh
+int age = Validator.CalculateAge(dtpNgaySinh.Value, dtpNgayVaoLam.Value);
+
+// Kiểm tra chuẩn kết hợp Schema + Nghiệp vụ đề thi
+DataTable schema = DbHelper.GetTableSchema("NhanVien");
+var val = Validator.FromSchema(this, schema,
+    Validator.Pattern(txtMaNV, "Mã NV", @"^NV\d{3}$", "Mã NV phải có dạng NV + 3 chữ số!"),
+    Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m, "Hệ số lương phải từ 2,34 – 8,0!"),
+    Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi", 18, 120,
+        "Nhân viên phải đủ 18 tuổi tính đến ngày vào làm!")
 );
 
 if (!val.IsValid)
@@ -78,35 +77,4 @@ if (!val.IsValid)
     FormHelper.FocusControl(val.ErrorControl);
     return;
 }
-```
-
----
-
-### Ví dụ 2: Đề thi Quản lý Sách / Sản phẩm
-- Mã sách bắt buộc.
-- Giá bán từ `1,000` đến `10,000,000` đ.
-- Số lượng tồn từ `0` đến `5,000`.
-- Năm xuất bản từ `1900` đến năm hiện tại.
-
-```csharp
-var val = Validator.ValidateAll(
-    Validator.Required(txtMaSach, "Mã sách"),
-    Validator.Required(txtTieuDe, "Tiêu đề sách"),
-    Validator.DecimalRange(txtGiaBan, "Giá bán", 1000m, 10000000m),
-    Validator.IntRange(txtSoLuongTon, "Số lượng tồn", 0, 5000),
-    Validator.IntRange(txtNamXB, "Năm xuất bản", 1900, DateTime.Now.Year)
-);
-```
-
----
-
-### Ví dụ 3: Logic tùy biến với `Validator.Custom`
-Kiểm tra số điện thoại phải bắt đầu bằng `0` và có đúng `10` chữ số:
-
-```csharp
-var val = Validator.ValidateAll(
-    Validator.Custom(txtSDT, "Số điện thoại", 
-        text => text.StartsWith("0") && text.Length == 10 && long.TryParse(text, out _),
-        "Số điện thoại phải bắt đầu bằng số 0 và gồm đúng 10 chữ số!")
-);
 ```

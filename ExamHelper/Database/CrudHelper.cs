@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -7,18 +8,24 @@ using System.Text.RegularExpressions;
 namespace ExamHelper.Database
 {
     /// <summary>
-    /// Hỗ trợ các thao tác CRUD tổng quát với SQL Server.
-    /// Tên bảng/cột được kiểm tra whitelist, giá trị dữ liệu luôn dùng SqlParameter.
+    /// Hỗ trợ các thao tác CRUD tổng quát đa hệ quản trị CSDL (SQL Server, SQLite, MySQL, PostgreSQL, OleDb, Odbc).
+    /// Tên bảng/cột được kiểm tra whitelist và bọc ngoặc theo từng hệ CSDL; giá trị dữ liệu luôn truyền qua tham số.
     /// </summary>
     public static class CrudHelper
     {
-        #region Kiểm tra tên định danh
+        #region Kiểm tra & Chuẩn hóa định danh
 
         /// <summary>
         /// Pattern hợp lệ cho tên bảng/cột: chữ cái, số, gạch dưới, dấu chấm, dấu ngoặc vuông.
         /// </summary>
         private static readonly Regex IdentifierPattern = new Regex(
             @"^[\w\[\]\.\s]+$", RegexOptions.Compiled);
+
+        private static string CleanIdentifier(string name)
+            => (name ?? "").Trim().Trim('[', ']', '`', '"');
+
+        private static string SafeParamSuffix(string columnName)
+            => Regex.Replace(CleanIdentifier(columnName), @"\W", "_");
 
         /// <summary>
         /// Kiểm tra tên bảng hoặc cột có hợp lệ không (chống SQL injection qua tên bảng).
@@ -31,22 +38,93 @@ namespace ExamHelper.Database
                 throw new ArgumentException("Tên bảng hoặc cột không được để trống.");
             if (!IdentifierPattern.IsMatch(name))
                 throw new ArgumentException($"Tên '{name}' chứa ký tự không hợp lệ. Chỉ cho phép chữ cái, số, gạch dưới và dấu ngoặc vuông.");
-        }
 
-        /// <summary>
-        /// Bọc tên bảng/cột trong dấu ngoặc vuông nếu chưa có.
-        /// Hỗ trợ cả tên có tiền tố schema (ví dụ: dbo.NhanVien -> [dbo].[NhanVien]).
-        /// </summary>
-        private static string Bracket(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name)) return "";
             string[] parts = name.Split('.');
             for (int i = 0; i < parts.Length; i++)
             {
-                string p = parts[i].Trim().Trim('[', ']');
-                parts[i] = $"[{p}]";
+                string part = parts[i].Trim().Trim('[', ']');
+                if (string.IsNullOrWhiteSpace(part) || part.Contains("[") || part.Contains("]"))
+                    throw new ArgumentException($"Tên '{name}' không hợp lệ.");
             }
-            return string.Join(".", parts);
+        }
+
+        /// <summary>
+        /// Bọc tên bảng/cột đúng cú pháp theo từng loại CSDL đang kết nối ([a].[b] cho SQL Server, `a`.`b` cho MySQL, "a"."b" cho SQLite/PostgreSQL).
+        /// </summary>
+        private static string Bracket(string name, string dbName = "default")
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "";
+            DbDialect dialect = DbHelper.TryGetDialect(dbName);
+            return DbHelper.QuoteIdentifier(name, dialect);
+        }
+
+        private static string BuildInsertSql(string table, Dictionary<string, object> values, string dbName, out List<SqlParameter> parameters)
+        {
+            ValidateIdentifier(table);
+            if (values == null || values.Count == 0)
+                throw new ArgumentException("Danh sách giá trị không được rỗng.");
+
+            var columns = new List<string>();
+            var paramNames = new List<string>();
+            parameters = new List<SqlParameter>();
+
+            foreach (var kvp in values)
+            {
+                ValidateIdentifier(kvp.Key);
+                columns.Add(Bracket(kvp.Key, dbName));
+                string paramName = $"@{SafeParamSuffix(kvp.Key)}_{parameters.Count}";
+                paramNames.Add(paramName);
+                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
+            }
+
+            return $"INSERT INTO {Bracket(table, dbName)} ({string.Join(", ", columns)}) VALUES ({string.Join(", ", paramNames)})";
+        }
+
+        private static List<string> BuildUpdateSetClauses(
+            Dictionary<string, object> values,
+            IList<KeyValuePair<string, object>> keyValues,
+            string dbName,
+            List<SqlParameter> parameters)
+        {
+            var setClauses = new List<string>();
+            foreach (var kvp in values)
+            {
+                string cleanField = CleanIdentifier(kvp.Key);
+                bool matchesUnchangedKey = false;
+                for (int i = 0; i < keyValues.Count; i++)
+                {
+                    if (string.Equals(CleanIdentifier(keyValues[i].Key), cleanField, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Equals(kvp.Value?.ToString()?.Trim(), keyValues[i].Value?.ToString()?.Trim()))
+                            matchesUnchangedKey = true;
+                        break;
+                    }
+                }
+                if (matchesUnchangedKey) continue;
+
+                ValidateIdentifier(kvp.Key);
+                string paramName = $"@{SafeParamSuffix(kvp.Key)}_{parameters.Count}";
+                setClauses.Add($"{Bracket(kvp.Key, dbName)} = {paramName}");
+                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
+            }
+            return setClauses;
+        }
+
+        private static string BuildWhereClause(
+            IEnumerable<KeyValuePair<string, object>> keys,
+            string dbName,
+            string paramPrefix,
+            List<SqlParameter> parameters)
+        {
+            var whereClauses = new List<string>();
+            foreach (var kvp in keys)
+            {
+                ValidateIdentifier(kvp.Key);
+                string paramName = $"@{paramPrefix}{SafeParamSuffix(kvp.Key)}_{parameters.Count}";
+                whereClauses.Add($"{Bracket(kvp.Key, dbName)} = {paramName}");
+                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
+            }
+            return string.Join(" AND ", whereClauses);
         }
 
         #endregion
@@ -56,72 +134,20 @@ namespace ExamHelper.Database
         /// <summary>
         /// Thêm một dòng dữ liệu vào bảng.
         /// </summary>
-        /// <param name="table">Tên bảng</param>
-        /// <param name="values">Dictionary (tên cột → giá trị)</param>
-        /// <param name="dbName">Tên database (mặc định "default")</param>
-        /// <returns>Số dòng bị ảnh hưởng (thường là 1 nếu thành công)</returns>
-        /// <example>
-        /// CrudHelper.Insert("NhanVien", new Dictionary&lt;string, object&gt; {
-        ///     {"MaNV", "NV001"},
-        ///     {"HoTen", "Nguyễn Văn A"},
-        ///     {"NgaySinh", dtpNgaySinh.Value},
-        ///     {"Luong", 5000000m}
-        /// });
-        /// </example>
         public static int Insert(string table, Dictionary<string, object> values, string dbName = "default")
         {
-            ValidateIdentifier(table);
-            if (values == null || values.Count == 0)
-                throw new ArgumentException("Danh sách giá trị không được rỗng.");
-
-            var columns = new List<string>();
-            var paramNames = new List<string>();
-            var parameters = new List<SqlParameter>();
-
-            foreach (var kvp in values)
-            {
-                ValidateIdentifier(kvp.Key);
-                columns.Add(Bracket(kvp.Key));
-                string cleanKey = Regex.Replace(kvp.Key.Replace("[", "").Replace("]", ""), @"\W", "_");
-                string paramName = $"@{cleanKey}_{parameters.Count}";
-                paramNames.Add(paramName);
-                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
-            }
-
-            string sql = $"INSERT INTO {Bracket(table)} ({string.Join(", ", columns)}) VALUES ({string.Join(", ", paramNames)})";
+            string sql = BuildInsertSql(table, values, dbName, out List<SqlParameter> parameters);
             return DbHelper.ExecuteNonQuery(sql, dbName, parameters.ToArray());
         }
 
         /// <summary>
         /// Thêm một dòng dữ liệu vào bảng và trả về giá trị khóa tự tăng (IDENTITY) vừa sinh ra.
         /// </summary>
-        /// <typeparam name="T">Kiểu dữ liệu của khóa tự tăng (int, long, decimal,...).</typeparam>
-        /// <param name="table">Tên bảng.</param>
-        /// <param name="values">Dictionary chứa tên cột và giá trị.</param>
-        /// <param name="dbName">Tên kết nối CSDL.</param>
-        /// <returns>Giá trị khóa tự tăng vừa sinh ra, hoặc default(T) nếu thất bại.</returns>
         public static T InsertAndGetId<T>(string table, Dictionary<string, object> values, string dbName = "default")
         {
-            ValidateIdentifier(table);
-            if (values == null || values.Count == 0)
-                throw new ArgumentException("Danh sách giá trị không được rỗng.");
-
-            var columns = new List<string>();
-            var paramNames = new List<string>();
-            var parameters = new List<SqlParameter>();
-
-            foreach (var kvp in values)
-            {
-                ValidateIdentifier(kvp.Key);
-                columns.Add(Bracket(kvp.Key));
-                string cleanKey = Regex.Replace(kvp.Key.Replace("[", "").Replace("]", ""), @"\W", "_");
-                string paramName = $"@{cleanKey}_{parameters.Count}";
-                paramNames.Add(paramName);
-                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
-            }
-
-            string sql = $"INSERT INTO {Bracket(table)} ({string.Join(", ", columns)}) VALUES ({string.Join(", ", paramNames)}); SELECT SCOPE_IDENTITY();";
-            return DbHelper.ExecuteScalar<T>(sql, dbName, parameters.ToArray());
+            string insertSql = BuildInsertSql(table, values, dbName, out List<SqlParameter> parameters);
+            string idSql = DbHelper.GetLastInsertIdSql(DbHelper.TryGetDialect(dbName));
+            return DbHelper.ExecuteScalar<T>($"{insertSql}; {idSql};", dbName, parameters.ToArray());
         }
 
         #endregion
@@ -131,20 +157,6 @@ namespace ExamHelper.Database
         /// <summary>
         /// Cập nhật một dòng dữ liệu theo khóa chính.
         /// </summary>
-        /// <param name="table">Tên bảng</param>
-        /// <param name="values">Dictionary (tên cột → giá trị mới), không bao gồm cột khóa</param>
-        /// <param name="keyColumn">Tên cột khóa chính</param>
-        /// <param name="keyValue">Giá trị khóa chính của dòng cần cập nhật</param>
-        /// <param name="dbName">Tên database</param>
-        /// <returns>Số dòng bị ảnh hưởng</returns>
-        /// <example>
-        /// CrudHelper.Update("NhanVien",
-        ///     new Dictionary&lt;string, object&gt; {
-        ///         {"HoTen", "Nguyễn Văn B"},
-        ///         {"Luong", 6000000m}
-        ///     },
-        ///     "MaNV", "NV001");
-        /// </example>
         public static int Update(string table, Dictionary<string, object> values,
             string keyColumn, object keyValue, string dbName = "default")
         {
@@ -153,46 +165,22 @@ namespace ExamHelper.Database
             if (values == null || values.Count == 0)
                 throw new ArgumentException("Danh sách giá trị không được rỗng.");
 
-            var setClauses = new List<string>();
             var parameters = new List<SqlParameter>();
-
-            foreach (var kvp in values)
-            {
-                // Tự động bỏ qua cột khóa nếu giá trị không đổi (tránh lỗi SQL Server "Cannot update identity column"
-                // và giúp lập trình viên không cần gọi values.Remove(keyColumn) thủ công)
-                if (string.Equals(kvp.Key.Replace("[", "").Replace("]", ""), keyColumn.Replace("[", "").Replace("]", ""), StringComparison.OrdinalIgnoreCase))
-                {
-                    if (Equals(kvp.Value?.ToString(), keyValue?.ToString()))
-                        continue;
-                }
-
-                ValidateIdentifier(kvp.Key);
-                string cleanKey = Regex.Replace(kvp.Key.Replace("[", "").Replace("]", ""), @"\W", "_");
-                string paramName = $"@{cleanKey}_{parameters.Count}";
-                setClauses.Add($"{Bracket(kvp.Key)} = {paramName}");
-                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
-            }
-
+            var keyPairs = new[] { new KeyValuePair<string, object>(keyColumn, keyValue) };
+            var setClauses = BuildUpdateSetClauses(values, keyPairs, dbName, parameters);
             if (setClauses.Count == 0)
                 return 0;
 
-            // Tham số cho điều kiện WHERE
-            string cleanKeyCol = Regex.Replace(keyColumn.Replace("[", "").Replace("]", ""), @"\W", "_");
-            string keyParamName = $"@key_{cleanKeyCol}";
+            string keyParamName = $"@key_{SafeParamSuffix(keyColumn)}";
             parameters.Add(new SqlParameter(keyParamName, keyValue ?? DBNull.Value));
 
-            string sql = $"UPDATE {Bracket(table)} SET {string.Join(", ", setClauses)} WHERE {Bracket(keyColumn)} = {keyParamName}";
+            string sql = $"UPDATE {Bracket(table, dbName)} SET {string.Join(", ", setClauses)} WHERE {Bracket(keyColumn, dbName)} = {keyParamName}";
             return DbHelper.ExecuteNonQuery(sql, dbName, parameters.ToArray());
         }
 
         /// <summary>
         /// Cập nhật dữ liệu với khóa chính phức hợp (nhiều cột khóa).
         /// </summary>
-        /// <param name="table">Tên bảng.</param>
-        /// <param name="values">Dictionary chứa tên cột và giá trị mới.</param>
-        /// <param name="keys">Dictionary chứa các cột khóa và giá trị định danh dòng cần cập nhật.</param>
-        /// <param name="dbName">Tên database.</param>
-        /// <returns>Số dòng bị ảnh hưởng.</returns>
         public static int Update(string table, Dictionary<string, object> values,
             Dictionary<string, object> keys, string dbName = "default")
         {
@@ -202,40 +190,13 @@ namespace ExamHelper.Database
             if (keys == null || keys.Count == 0)
                 throw new ArgumentException("Danh sách khóa chính không được rỗng.");
 
-            var setClauses = new List<string>();
             var parameters = new List<SqlParameter>();
-
-            foreach (var kvp in values)
-            {
-                string cleanField = kvp.Key.Replace("[", "").Replace("]", "");
-                var matchingKey = keys.FirstOrDefault(k => string.Equals(k.Key.Replace("[", "").Replace("]", ""), cleanField, StringComparison.OrdinalIgnoreCase));
-                if (!matchingKey.Equals(default(KeyValuePair<string, object>)))
-                {
-                    if (Equals(kvp.Value?.ToString(), matchingKey.Value?.ToString()))
-                        continue;
-                }
-
-                ValidateIdentifier(kvp.Key);
-                string cleanKey = Regex.Replace(cleanField, @"\W", "_");
-                string paramName = $"@{cleanKey}_{parameters.Count}";
-                setClauses.Add($"{Bracket(kvp.Key)} = {paramName}");
-                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
-            }
-
+            var setClauses = BuildUpdateSetClauses(values, keys.ToList(), dbName, parameters);
             if (setClauses.Count == 0)
                 return 0;
 
-            var whereClauses = new List<string>();
-            foreach (var kvp in keys)
-            {
-                ValidateIdentifier(kvp.Key);
-                string cleanKey = Regex.Replace(kvp.Key.Replace("[", "").Replace("]", ""), @"\W", "_");
-                string paramName = $"@k_{cleanKey}_{parameters.Count}";
-                whereClauses.Add($"{Bracket(kvp.Key)} = {paramName}");
-                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
-            }
-
-            string sql = $"UPDATE {Bracket(table)} SET {string.Join(", ", setClauses)} WHERE {string.Join(" AND ", whereClauses)}";
+            string whereClause = BuildWhereClause(keys, dbName, "k_", parameters);
+            string sql = $"UPDATE {Bracket(table, dbName)} SET {string.Join(", ", setClauses)} WHERE {whereClause}";
             return DbHelper.ExecuteNonQuery(sql, dbName, parameters.ToArray());
         }
 
@@ -246,47 +207,28 @@ namespace ExamHelper.Database
         /// <summary>
         /// Xóa một dòng theo khóa chính.
         /// </summary>
-        /// <param name="table">Tên bảng</param>
-        /// <param name="keyColumn">Tên cột khóa chính</param>
-        /// <param name="keyValue">Giá trị khóa của dòng cần xóa</param>
-        /// <param name="dbName">Tên database</param>
-        /// <returns>Số dòng bị ảnh hưởng</returns>
         public static int Delete(string table, string keyColumn, object keyValue, string dbName = "default")
         {
             ValidateIdentifier(table);
             ValidateIdentifier(keyColumn);
 
             string paramName = "@keyValue";
-            string sql = $"DELETE FROM {Bracket(table)} WHERE {Bracket(keyColumn)} = {paramName}";
+            string sql = $"DELETE FROM {Bracket(table, dbName)} WHERE {Bracket(keyColumn, dbName)} = {paramName}";
             return DbHelper.ExecuteNonQuery(sql, dbName, new SqlParameter(paramName, keyValue ?? DBNull.Value));
         }
 
         /// <summary>
         /// Xóa một dòng theo khóa chính phức hợp (nhiều cột khóa).
         /// </summary>
-        /// <param name="table">Tên bảng.</param>
-        /// <param name="keys">Dictionary chứa các cột khóa và giá trị của dòng cần xóa.</param>
-        /// <param name="dbName">Tên database.</param>
-        /// <returns>Số dòng bị ảnh hưởng.</returns>
         public static int Delete(string table, Dictionary<string, object> keys, string dbName = "default")
         {
             ValidateIdentifier(table);
             if (keys == null || keys.Count == 0)
                 throw new ArgumentException("Danh sách khóa chính không được rỗng.");
 
-            var whereClauses = new List<string>();
             var parameters = new List<SqlParameter>();
-
-            foreach (var kvp in keys)
-            {
-                ValidateIdentifier(kvp.Key);
-                string cleanKey = Regex.Replace(kvp.Key.Replace("[", "").Replace("]", ""), @"\W", "_");
-                string paramName = $"@k_{cleanKey}_{parameters.Count}";
-                whereClauses.Add($"{Bracket(kvp.Key)} = {paramName}");
-                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
-            }
-
-            string sql = $"DELETE FROM {Bracket(table)} WHERE {string.Join(" AND ", whereClauses)}";
+            string whereClause = BuildWhereClause(keys, dbName, "k_", parameters);
+            string sql = $"DELETE FROM {Bracket(table, dbName)} WHERE {whereClause}";
             return DbHelper.ExecuteNonQuery(sql, dbName, parameters.ToArray());
         }
 
@@ -297,17 +239,12 @@ namespace ExamHelper.Database
         /// <summary>
         /// Kiểm tra giá trị đã tồn tại trong bảng chưa (dùng khi thêm mới).
         /// </summary>
-        /// <param name="table">Tên bảng</param>
-        /// <param name="column">Tên cột cần kiểm tra</param>
-        /// <param name="value">Giá trị cần kiểm tra</param>
-        /// <param name="dbName">Tên database</param>
-        /// <returns>true nếu đã tồn tại</returns>
         public static bool Exists(string table, string column, object value, string dbName = "default")
         {
             ValidateIdentifier(table);
             ValidateIdentifier(column);
 
-            string sql = $"SELECT COUNT(*) FROM {Bracket(table)} WHERE {Bracket(column)} = @checkValue";
+            string sql = $"SELECT COUNT(*) FROM {Bracket(table, dbName)} WHERE {Bracket(column, dbName)} = @checkValue";
             int count = DbHelper.ExecuteScalar<int>(sql, dbName, new SqlParameter("@checkValue", value ?? DBNull.Value));
             return count > 0;
         }
@@ -315,29 +252,15 @@ namespace ExamHelper.Database
         /// <summary>
         /// Kiểm tra tồn tại với nhiều điều kiện kết hợp (Dictionary).
         /// </summary>
-        /// <param name="table">Tên bảng.</param>
-        /// <param name="keys">Dictionary chứa các cột và giá trị cần kiểm tra.</param>
-        /// <param name="dbName">Tên database.</param>
-        /// <returns>true nếu đã tồn tại bản ghi thỏa mãn tất cả điều kiện.</returns>
         public static bool Exists(string table, Dictionary<string, object> keys, string dbName = "default")
         {
             ValidateIdentifier(table);
             if (keys == null || keys.Count == 0)
                 return false;
 
-            var whereClauses = new List<string>();
             var parameters = new List<SqlParameter>();
-
-            foreach (var kvp in keys)
-            {
-                ValidateIdentifier(kvp.Key);
-                string cleanKey = Regex.Replace(kvp.Key.Replace("[", "").Replace("]", ""), @"\W", "_");
-                string paramName = $"@c_{cleanKey}_{parameters.Count}";
-                whereClauses.Add($"{Bracket(kvp.Key)} = {paramName}");
-                parameters.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
-            }
-
-            string sql = $"SELECT COUNT(*) FROM {Bracket(table)} WHERE {string.Join(" AND ", whereClauses)}";
+            string whereClause = BuildWhereClause(keys, dbName, "c_", parameters);
+            string sql = $"SELECT COUNT(*) FROM {Bracket(table, dbName)} WHERE {whereClause}";
             int count = DbHelper.ExecuteScalar<int>(sql, dbName, parameters.ToArray());
             return count > 0;
         }
@@ -365,11 +288,64 @@ namespace ExamHelper.Database
                 return Exists(table, checkColumn, checkValue, dbName);
             }
 
-            string sql = $"SELECT COUNT(*) FROM {Bracket(table)} WHERE {Bracket(checkColumn)} = @checkValue AND {Bracket(keyColumn)} <> @keyValue";
+            string sql = $"SELECT COUNT(*) FROM {Bracket(table, dbName)} WHERE {Bracket(checkColumn, dbName)} = @checkValue AND {Bracket(keyColumn, dbName)} <> @keyValue";
             int count = DbHelper.ExecuteScalar<int>(sql, dbName,
                 new SqlParameter("@checkValue", checkValue ?? DBNull.Value),
                 new SqlParameter("@keyValue", keyValue));
             return count > 0;
+        }
+
+        #endregion
+
+        #region Truy vấn nhanh (GetAll / GetById)
+
+        /// <summary>
+        /// Lấy toàn bộ dữ liệu từ bảng trong 1 câu lệnh (tùy chọn ORDER BY an toàn).
+        /// Tự động mở và đóng kết nối sau khi lấy xong.
+        /// </summary>
+        public static DataTable GetAll(string table, string orderBy = null, string dbName = "default")
+        {
+            ValidateIdentifier(table);
+            string sql = $"SELECT * FROM {Bracket(table, dbName)}";
+
+            if (!string.IsNullOrWhiteSpace(orderBy))
+            {
+                var orderParts = new List<string>();
+                foreach (string segment in orderBy.Split(','))
+                {
+                    string[] tokens = segment.Trim().Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (tokens.Length == 0 || tokens.Length > 2)
+                        throw new ArgumentException($"Mệnh đề ORDER BY '{orderBy}' không hợp lệ.");
+
+                    ValidateIdentifier(tokens[0]);
+                    string dir = "";
+                    if (tokens.Length == 2)
+                    {
+                        if (!string.Equals(tokens[1], "ASC", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(tokens[1], "DESC", StringComparison.OrdinalIgnoreCase))
+                            throw new ArgumentException($"Hướng sắp xếp '{tokens[1]}' không hợp lệ (chỉ hỗ trợ ASC/DESC).");
+                        dir = " " + tokens[1].ToUpperInvariant();
+                    }
+                    orderParts.Add(Bracket(tokens[0], dbName) + dir);
+                }
+
+                if (orderParts.Count > 0)
+                    sql += " ORDER BY " + string.Join(", ", orderParts);
+            }
+
+            return DbHelper.GetDataTable(sql, dbName);
+        }
+
+        /// <summary>
+        /// Lấy nhanh 1 dòng dữ liệu theo khóa chính (trả về null nếu không tìm thấy).
+        /// </summary>
+        public static DataRow GetById(string table, string keyColumn, object keyValue, string dbName = "default")
+        {
+            ValidateIdentifier(table);
+            ValidateIdentifier(keyColumn);
+
+            string sql = $"SELECT * FROM {Bracket(table, dbName)} WHERE {Bracket(keyColumn, dbName)} = @id";
+            return DbHelper.GetDataRow(sql, dbName, new SqlParameter("@id", keyValue ?? DBNull.Value));
         }
 
         #endregion

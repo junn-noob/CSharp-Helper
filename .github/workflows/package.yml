@@ -1,0 +1,65 @@
+name: Build, Test & Package ExamHelper
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-test-pack:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDKs (8.0 & 10.0)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore solution
+        run: dotnet restore ExamHelper.sln
+
+      - name: Build solution (Release)
+        run: dotnet build ExamHelper.sln -c Release --no-restore
+
+      - name: Build sample exam (Release)
+        run: dotnet build Samples/De01_QLNhanSu/De01_QLNhanSu.csproj -c Release
+
+      - name: Run unit tests (Release)
+        run: dotnet test ExamHelper.sln -c Release --no-build --verbosity normal
+
+      - name: Pack NuGet package (.nupkg & .snupkg)
+        run: dotnet pack ExamHelper/ExamHelper.csproj -c Release --no-build -o ./nupkgs
+
+      - name: Upload NuGet artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExamHelper-nupkg
+          path: ./nupkgs/*
+
+      - name: Publish to GitHub Packages & Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet nuget push "./nupkgs/*.nupkg" `
+            --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" `
+            --api-key "${{ secrets.GITHUB_TOKEN }}" `
+            --skip-duplicate
+
+          $tag = "${{ github.ref_name }}"
+          gh release create $tag ./nupkgs/*.nupkg ./nupkgs/*.snupkg `
+            --title "ExamHelper $tag" `
+            --generate-notes

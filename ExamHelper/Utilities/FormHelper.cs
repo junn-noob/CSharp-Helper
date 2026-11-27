@@ -1,6 +1,5 @@
 using System;
 using System.Windows.Forms;
-using System.Drawing;
 
 namespace ExamHelper.Utilities
 {
@@ -165,7 +164,12 @@ namespace ExamHelper.Utilities
             if (e == null || e.Value == null || e.Value == DBNull.Value)
                 return;
 
-            if (decimal.TryParse(e.Value.ToString(), out decimal value))
+            if (e.Value is decimal dec)
+            {
+                e.Value = dec.ToString("N0") + " đ";
+                e.FormattingApplied = true;
+            }
+            else if (DataHelper.TryParseDecimal(e.Value.ToString(), out decimal value))
             {
                 e.Value = value.ToString("N0") + " đ";
                 e.FormattingApplied = true;
@@ -203,6 +207,33 @@ namespace ExamHelper.Utilities
             foreach (Control child in container.Controls)
             {
                 child.Enabled = enabled;
+            }
+        }
+
+        /// <summary>
+        /// Thiết lập định dạng hiển thị ngày chuẩn Việt Nam (dd/MM/yyyy) cho một hoặc nhiều DateTimePicker.
+        /// </summary>
+        public static void FormatDatePickers(params DateTimePicker[] pickers)
+        {
+            FormatDatePickers("dd/MM/yyyy", pickers);
+        }
+
+        /// <summary>
+        /// Thiết lập định dạng hiển thị tùy chỉnh cho một hoặc nhiều DateTimePicker.
+        /// </summary>
+        public static void FormatDatePickers(string customFormat, params DateTimePicker[] pickers)
+        {
+            if (pickers == null)
+                return;
+
+            string fmt = string.IsNullOrWhiteSpace(customFormat) ? "dd/MM/yyyy" : customFormat;
+            foreach (var dtp in pickers)
+            {
+                if (dtp != null)
+                {
+                    dtp.Format = DateTimePickerFormat.Custom;
+                    dtp.CustomFormat = fmt;
+                }
             }
         }
     }

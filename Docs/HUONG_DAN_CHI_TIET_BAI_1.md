@@ -698,7 +698,7 @@ private void btnXuatBaoCao_Click(object sender, EventArgs e)
 
     string dieuKien = $"Chuyên khoa: {cboChuyenKhoa.Text}; Giới tính: {cboGioiTinh.Text}";
 
-    // Tự động mở Form báo cáo dùng chung (có sẵn In ấn và Xuất Excel):
+    // Tự động mở Form báo cáo dùng chung (hỗ trợ kéo-thả cột, In/PDF và xuất Excel .xlsx):
     ReportHelper.ShowReport(
         dataTable: _dtKetQua,
         reportTitle: "BÁO CÁO DANH SÁCH BÁC SĨ THEO CHUYÊN KHOA",
@@ -711,7 +711,7 @@ private void btnXuatBaoCao_Click(object sender, EventArgs e)
             new ReportColumn("GioiTinhHienThi", "Giới tính", HorizontalAlignment.Center),
             new ReportColumn("NgaySinh", "Ngày sinh", "dd/MM/yyyy", HorizontalAlignment.Center),
             new ReportColumn("NgayVaoLam", "Ngày vào làm", "dd/MM/yyyy", HorizontalAlignment.Center),
-            new ReportColumn("DonGiaKham", "Đơn giá khám", "N0", HorizontalAlignment.Right, isSum: true) // isSum = tính tổng
+            new ReportColumn("DonGiaKham", "Đơn giá khám", "N0", HorizontalAlignment.Right, ReportSummaryMode.Sum)
         }
     );
 
@@ -719,6 +719,7 @@ private void btnXuatBaoCao_Click(object sender, EventArgs e)
     // ReportHelper.ShowReport(_dtKetQua, "BÁO CÁO DANH SÁCH BÁC SĨ", "TenCK", "DonGiaKham", dieuKien);
 }
 ```
+> *Lưu ý:* `ReportHelper.ShowReport` dùng `FormReportViewer` với xuất file chuẩn `.xlsx` (OpenXML) và cho phép kéo-thả ẩn/hiện/sắp xếp cột trực tiếp; phần `frmBaoCaoBacSi` tự viết ở trên là ví dụ minh họa HTML `.xls` thuần khi muốn tạo Form riêng không phụ thuộc viewer có sẵn.
 
 ### 📋 Cách 2: Tự tạo Form riêng `frmBaoCaoBacSi`
 Nếu giám khảo phòng thi yêu cầu phải nhìn thấy Form `frmBaoCaoBacSi` trong cây Solution Explorer:
@@ -740,6 +741,7 @@ private void btnXuatBaoCao_Click(object sender, EventArgs e)
 ---
 
 ## 🏆 KINH NGHIỆM ĂN TRỌN ĐIỂM TRONG PHÒNG THI
-1. **Kiểm tra tuổi tại ngày vào làm:** Luôn truyền `dtpNgayVaoLam.Value` làm tham số đầu tiên trong `Validator.ValidateAll(dtpNgayVaoLam.Value, ...)`. Nếu chỉ so sánh năm trừ năm thông thường (`Year - Year`), bạn sẽ bị trừ 0.5 - 1.0 điểm do sai ngày/tháng sinh.
+1. **Kiểm tra tuổi tại ngày vào làm:** Dùng `Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi bác sĩ", 24, 100, ...)` (không cần truyền ngày mốc vào đầu `ValidateAll`), hoặc truyền `dtpNgayVaoLam.Value` làm tham số đầu tiên của `Validator.ValidateAll(dtpNgayVaoLam.Value, ...)`. Nếu chỉ lấy năm trừ năm (`Year - Year`), bạn sẽ bị trừ 0.5 - 1.0 điểm do sai ngày/tháng sinh.
 2. **Khóa mã khi sửa:** Ô mã chính luôn đặt `ReadOnly = true` khi chọn dòng, và chỉ mở `ReadOnly = false` khi bấm **Làm mới**. Khi sửa tuyệt đối **không** kiểm tra trùng mã.
 3. **Phím tắt Alt:** Luôn đặt dấu `&` trước ký tự phím tắt trên Text của nút bấm (`&Thêm`, `&Sửa`, `&Xóa`, `&Làm mới`, `Thống &kê`, `T&hoát`).
+4. **Quy trình làm nhanh theo cấu trúc đề:** Xem thêm [05_EXAM_QUICKSTART.md](05_EXAM_QUICKSTART.md) và [EXAM_CHEATSHEET.md](EXAM_CHEATSHEET.md).

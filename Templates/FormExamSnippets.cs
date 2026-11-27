@@ -10,7 +10,6 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.SqlClient;
 using System.IO;
 using System.Text;
 using System.Windows.Forms;
@@ -45,11 +44,13 @@ namespace ExamHelper.Templates
         // --------------------------------------------------------------------------------------
         private void Form1_Load(object sender, EventArgs e)
         {
-            // Thiết lập kết nối SQL Server (Tự động nhận diện localhost)
+            // Thiết lập kết nối SQL Server (có thể đọc từ App.config qua SetConnectionStringFromConfig hoặc ghi trực tiếp)
             DbHelper.SetDefaultConnectionString($"Server=.;Database={DB_NAME};Trusted_Connection=True;");
 
+            // Định dạng chuẩn dd/MM/yyyy cho tất cả DateTimePicker
+            FormHelper.FormatDatePickers(dtpNgaySinh, dtpNgayVaoLam);
+
             // Nạp ComboBox danh mục khóa ngoại (Ví dụ: Phòng ban, Lớp học, Thể loại...)
-            // Cú pháp: Bind(cbo, DataTable, "Cột_Giá_Trị_Value", "Cột_Hiển_Thị_Display")
             DataTable dtDanhMuc = DbHelper.GetDataTable("SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB");
             ComboBoxHelper.Bind(cboPhongBan, dtDanhMuc, "MaPB", "TenPB");
 
@@ -70,16 +71,16 @@ namespace ExamHelper.Templates
 
             DataTable dt = DbHelper.GetDataTable(sql);
 
-            // Nạp dữ liệu lên DataGridView kèm định dạng cột
+            // Nạp dữ liệu lên DataGridView kèm định dạng cột & căn phải cho số
             GridHelper.Bind(dgvDanhSach, dt,
                 new GridHelper.GridColumn("MaNV", "Mã NV", 90),
                 new GridHelper.GridColumn("HoTen", "Họ tên", 180),
                 new GridHelper.GridColumn("GioiTinhHienThi", "Giới tính", 80),
                 new GridHelper.GridColumn("NgaySinh", "Ngày sinh", 100, "dd/MM/yyyy"),
                 new GridHelper.GridColumn("TenPB", "Phòng ban", 140),
-                new GridHelper.GridColumn("HeSoLuong", "Hệ số lương", 90, "0.##"),
+                new GridHelper.GridColumn("HeSoLuong", "Hệ số lương", 90, "0.##", DataGridViewContentAlignment.MiddleRight),
                 new GridHelper.GridColumn("NgayVaoLam", "Ngày vào làm", 100, "dd/MM/yyyy"),
-                new GridHelper.GridColumn("Luong", "Lương", 120, "N0") // N0 = Phân cách hàng nghìn (1.500.000)
+                new GridHelper.GridColumn("Luong", "Lương", 120, "N0", DataGridViewContentAlignment.MiddleRight)
             );
 
             // Bật chế độ chỉ đọc, chọn nguyên dòng
@@ -94,22 +95,16 @@ namespace ExamHelper.Templates
             DataRowView row = GridHelper.GetSelectedRow(dgvDanhSach);
             if (row == null) return;
 
-            // Ánh xạ an toàn từ DataRow lên controls (Không bao giờ lỗi DBNull)
+            // Ánh xạ an toàn từ DataRow lên controls (hỗ trợ cả cặp RadioButton Nam/Nữ)
             FormMapper.LoadRow(row,
                 FormMapper.Map(txtMaNV, "MaNV"),
                 FormMapper.Map(txtHoTen, "HoTen"),
+                FormMapper.Map(rdoNam, rdoNu, "GioiTinh"),
                 FormMapper.Map(dtpNgaySinh, "NgaySinh"),
                 FormMapper.Map(cboPhongBan, "MaPB"),
                 FormMapper.Map(txtHeSoLuong, "HeSoLuong"),
                 FormMapper.Map(dtpNgayVaoLam, "NgayVaoLam")
             );
-
-            // Xử lý RadioButton Giới tính nếu có
-            if (row["GioiTinh"] != DBNull.Value)
-            {
-                rdoNam.Checked = Convert.ToBoolean(row["GioiTinh"]);
-                rdoNu.Checked = !rdoNam.Checked;
-            }
 
             // Khóa ô mã chính sang chỉ đọc khi chọn dòng sửa/xem
             txtMaNV.ReadOnly = true;
@@ -176,6 +171,7 @@ namespace ExamHelper.Templates
             {
                 MessageHelper.Success("cập nhật");
                 LoadData();
+                GridHelper.SelectRowByValue(dgvDanhSach, KEY_COLUMN, ma); // Giữ nguyên dòng vừa sửa
             }
         }
 
@@ -191,8 +187,8 @@ namespace ExamHelper.Templates
             }
 
             string ma = txtMaNV.Text.Trim();
-            // Hộp thoại hỏi đúng mẫu chuẩn: "Bạn có chắc chắn muốn xóa ... không?"
-            if (MessageHelper.ConfirmDelete($"bản ghi có mã {ma}") && CrudHelper.Delete(TABLE_NAME, KEY_COLUMN, ma) > 0)
+            // Hộp thoại hỏi đúng mẫu chuẩn: "Bạn có chắc chắn muốn xóa nhân viên ... không?"
+            if (MessageHelper.ConfirmDelete($"nhân viên {ma}") && CrudHelper.Delete(TABLE_NAME, KEY_COLUMN, ma) > 0)
             {
                 MessageHelper.Success("xóa");
                 LoadData();
@@ -214,6 +210,9 @@ namespace ExamHelper.Templates
             dtpNgayVaoLam.Value = DateTime.Today;
             if (cboPhongBan.Items.Count > 0) cboPhongBan.SelectedIndex = 0;
 
+            // Bỏ chọn trên DataGridView (để có thể click lại dòng đầu tiên sau khi làm mới)
+            GridHelper.ClearSelection(dgvDanhSach);
+
             // Mở khóa ô mã để nhập mới và focus con trỏ
             txtMaNV.ReadOnly = false;
             txtMaNV.Focus();
@@ -233,29 +232,27 @@ namespace ExamHelper.Templates
         private ValidationResult ValidateForm()
         {
             return Validator.ValidateAll(
-                dtpNgayVaoLam.Value, // Ngày tham chiếu nếu cần tính tuổi tính đến ngày vào làm
                 Validator.Required(txtMaNV, "Mã nhân viên"),
                 Validator.Pattern(txtMaNV, "Mã nhân viên", @"^NV\d{3}$", "Mã phải có định dạng 'NV' + 3 chữ số (ví dụ: NV008)!"),
                 Validator.Required(txtHoTen, "Họ tên"),
+                Validator.Selected(cboPhongBan, "Phòng ban"),
+                Validator.Required(txtHeSoLuong, "Hệ số lương"),
                 Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m, "Hệ số lương phải từ 2,34 đến 8,0!"),
-                Validator.AgeRangeAtDate(dtpNgaySinh, "Tuổi nhân viên", 18, 100, "Nhân viên phải đủ 18 tuổi tính đến ngày vào làm!")
+                Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi nhân viên", 18, 120, "Nhân viên phải đủ 18 tuổi tính đến ngày vào làm!")
             );
         }
 
         private Dictionary<string, object> GetFormValues()
         {
-            var dict = FormMapper.GetValues(
+            return FormMapper.GetValues(
                 FormMapper.Map(txtMaNV, "MaNV"),
                 FormMapper.Map(txtHoTen, "HoTen"),
+                FormMapper.Map(rdoNam, rdoNu, "GioiTinh"),
                 FormMapper.Map(cboPhongBan, "MaPB"),
                 FormMapper.Map(dtpNgaySinh, "NgaySinh"),
-                FormMapper.Map(txtHeSoLuong, "HeSoLuong"),
+                FormMapper.MapDouble(txtHeSoLuong, "HeSoLuong"), // Chuyển "2,34" -> double 2.34 chuẩn SQL FLOAT
                 FormMapper.Map(dtpNgayVaoLam, "NgayVaoLam")
             );
-
-            // Gán giá trị RadioButton nếu có
-            dict["GioiTinh"] = rdoNam.Checked ? 1 : 0;
-            return dict;
         }
     }
 
@@ -278,10 +275,10 @@ namespace ExamHelper.Templates
         {
             // ComboBox có thêm dòng "Tất cả" ở đầu danh sách
             DataTable dtPB = DbHelper.GetDataTable("SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB");
-            ComboBoxHelper.BindWithAll(cboPhongBan, dtPB, "MaPB", "TenPB", "-- Tất cả --");
+            ComboBoxHelper.BindWithAll(cboPhongBan, dtPB, "MaPB", "TenPB", "Tất cả");
 
-            // ComboBox Giới tính: chọn mục đầu tiên (Tất cả)
-            if (cboGioiTinh.Items.Count > 0) cboGioiTinh.SelectedIndex = 0;
+            // ComboBox Giới tính: nạp danh sách tĩnh và chọn sẵn "Tất cả"
+            ComboBoxHelper.BindItems(cboGioiTinh, "Tất cả", "Nam", "Nữ");
 
             // Nạp dữ liệu ban đầu hiển thị tất cả
             TimKiem(isInitial: true);
@@ -321,9 +318,9 @@ namespace ExamHelper.Templates
                 new GridHelper.GridColumn("GioiTinhHienThi", "Giới tính", 80),
                 new GridHelper.GridColumn("NgaySinh", "Ngày sinh", 100, "dd/MM/yyyy"),
                 new GridHelper.GridColumn("TenPB", "Phòng ban", 140),
-                new GridHelper.GridColumn("HeSoLuong", "Hệ số lương", 90, "0.##"),
+                new GridHelper.GridColumn("HeSoLuong", "Hệ số lương", 90, "0.##", DataGridViewContentAlignment.MiddleRight),
                 new GridHelper.GridColumn("NgayVaoLam", "Ngày vào làm", 100, "dd/MM/yyyy"),
-                new GridHelper.GridColumn("Luong", "Lương", 120, "N0")
+                new GridHelper.GridColumn("Luong", "Lương", 120, "N0", DataGridViewContentAlignment.MiddleRight)
             );
             GridHelper.SetReadOnly(dgvKetQua);
 
@@ -358,20 +355,22 @@ namespace ExamHelper.Templates
                 dataTable: _dtKetQua,
                 reportTitle: "BẢNG LƯƠNG NHÂN VIÊN",
                 filterCondition: dieuKien,
-                groupByColumn: "TenPB", // Gom nhóm theo Phòng ban
+                groupByColumn: "TenPB",           // Gom nhóm theo Phòng ban
+                groupPrefix: "Phòng ban: ",       // Tiền tố tiêu đề nhóm khớp mẫu đề
                 columns: new[] {
                     new ReportColumn("MaNV", "Mã NV", HorizontalAlignment.Center),
                     new ReportColumn("HoTen", "Họ tên"),
                     new ReportColumn("NgaySinh", "Ngày sinh", "dd/MM/yyyy", HorizontalAlignment.Center),
-                    new ReportColumn("HeSoLuong", "Hệ số lương", "0.##", HorizontalAlignment.Center),
+                    new ReportColumn("HeSoLuong", "Hệ số lương", "0.##", HorizontalAlignment.Right),
                     new ReportColumn("Luong", "Lương", "N0", HorizontalAlignment.Right, isSum: true) // isSum = tính tổng
-                }
+                },
+                companyName: "CÔNG TY TNHH AN PHÁT"
             );
 
             // HOẶC CÁCH 1B (SIÊU TỐC - TỰ ĐỘNG TẤT CẢ):
-            // ReportHelper.ShowReport(_dtKetQua, "BẢNG LƯƠNG NHÂN VIÊN", "TenPB", "Luong", dieuKien);
+            // ReportHelper.ShowReport(_dtKetQua, "BẢNG LƯƠNG NHÂN VIÊN", "TenPB", "Luong", dieuKien, companyName: "CÔNG TY TNHH AN PHÁT", groupPrefix: "Phòng ban: ");
 
-            // CÁCH 2: Dùng Form tự tạo bên dưới nếu giám khảo yêu cầu phải add thêm Form riêng
+            // CÁCH 2: Dùng Form tự tạo bên dưới hoặc Form RDLC (ReportViewer) nếu đề bắt buộc RDLC/Crystal Report
             // new FormBaoCao_MauChuan(_dtKetQua, dieuKien).ShowDialog();
         }
 
@@ -458,12 +457,12 @@ namespace ExamHelper.Templates
                 {
                     decimal luong = Convert.ToDecimal(r["Luong"]);
                     tongTien += luong;
-                    sb.Append($"<tr><td class='c'>{stt++}</td><td class='c'>{r["MaNV"]}</td><td>{r["HoTen"]}</td><td class='c'>{Convert.ToDateTime(r["NgaySinh"]):dd/MM/yyyy}</td><td class='c'>{r["HeSoLuong"]}</td><td class='r'>{luong:N0} đ</td></tr>");
+                    sb.Append($"<tr><td class='c'>{stt++}</td><td class='c'>{r["MaNV"]}</td><td>{r["HoTen"]}</td><td class='c'>{Convert.ToDateTime(r["NgaySinh"]):dd/MM/yyyy}</td><td class='r'>{r["HeSoLuong"]}</td><td class='r'>{luong:N0}</td></tr>");
                 }
             }
 
             // Dòng Tổng cộng
-            sb.Append($"<tr class='tong'><td colspan='2' class='c'>TỔNG CỘNG</td><td colspan='3'></td><td class='r'>{tongTien:N0} đ</td></tr>");
+            sb.Append($"<tr class='tong'><td></td><td class='c'>TỔNG CỘNG</td><td colspan='3'></td><td class='r'>{tongTien:N0}</td></tr>");
             sb.Append("</table>");
 
             // Chữ ký Người lập biểu
@@ -472,5 +471,59 @@ namespace ExamHelper.Templates
 
             return sb.ToString();
         }
+    }
+
+    // ==========================================================================================
+    // PHẦN 4: MẪU FORM BÁO CÁO RDLC (DÙNG MICROSOFT REPORTVIEWER - XUẤT PDF / EXCEL CHUẨN ĐỀ THI)
+    // ==========================================================================================
+    public class FormBaoCao_RDLC_MauChuan : Form
+    {
+        private readonly DataTable _dataTable;
+        private readonly string _dieuKienLoc;
+        private object reportViewer1; // Trong Form thật của bạn, đây là control Microsoft.Reporting.WinForms.ReportViewer
+
+        public FormBaoCao_RDLC_MauChuan(DataTable dataTable, string dieuKienLoc)
+        {
+            _dataTable = dataTable;
+            _dieuKienLoc = dieuKienLoc;
+        }
+
+        private void FormBaoCao_Load(object sender, EventArgs e)
+        {
+            // 1. Tự động thêm cột STT (1..N) nếu cần hiển thị trong RDLC
+            DataTable dtReport = ReportHelper.PrepareReportTable(_dataTable);
+
+            // 2. Truyền tham số vào RDLC (trong file .rdlc tạo sẵn pDieuKienLoc và pNgayLap)
+            var parameters = new Dictionary<string, string>
+            {
+                { "pDieuKienLoc", _dieuKienLoc },
+                { "pNgayLap", DateTime.Now.ToString("dd/MM/yyyy") }
+            };
+
+            // 3. Nạp DataSet và Parameters vào ReportViewer trong 1 lệnh duy nhất
+            ReportHelper.BindRdlc(
+                reportViewer: reportViewer1,
+                dataSetName: "dsNhanVien", // Tên DataSet khai báo trong file .rdlc
+                data: dtReport,
+                parameters: parameters,
+                reportEmbeddedResource: "TenProject.rptBangLuong.rdlc"
+            );
+        }
+
+        private void btnXuatPDF_Click(object sender, EventArgs e)
+        {
+            // Tự động mở SaveFileDialog và xuất file .pdf bằng LocalReport.Render("PDF")
+            ReportHelper.ExportRdlc(reportViewer1, "PDF", "BangLuongNhanVien");
+        }
+
+        private void btnXuatExcel_Click(object sender, EventArgs e)
+        {
+            // Tự động mở SaveFileDialog và xuất file .xlsx bằng LocalReport.Render("EXCELOPENXML")
+            ReportHelper.ExportRdlc(reportViewer1, "EXCELOPENXML", "BangLuongNhanVien");
+        }
+
+        // Nếu chọn Crystal Report:
+        // ReportHelper.BindCrystalReport(crystalReportViewer1, rptDoc, dtReport, new Dictionary<string, object> { { "pDieuKienLoc", _dieuKienLoc } });
+        // ReportHelper.ExportCrystalReport(rptDoc, "PDF", "BangLuongNhanVien");
     }
 }

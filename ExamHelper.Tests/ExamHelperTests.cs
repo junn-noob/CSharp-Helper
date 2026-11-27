@@ -1,6 +1,11 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
 using System.Windows.Forms;
 using ExamHelper.Binding;
 using ExamHelper.Database;
@@ -800,7 +805,1230 @@ namespace ExamHelper.Tests
             Assert.Contains("500,000", html);
         }
 
+        [Fact]
+        public void ReportHelper_GenerateHtml_ExamFormat_Footer_GroupTotals_And_EdgeCases()
+        {
+            var dt = new DataTable();
+            dt.Columns.Add("MaNV", typeof(string));
+            dt.Columns.Add("TenPB", typeof(string));
+            dt.Columns.Add("Luong", typeof(decimal));
+
+            dt.Rows.Add("NV01", "Kinh doanh", 5000000m);
+            dt.Rows.Add("NV02", DBNull.Value, 3000000m);
+
+            var cols = new[]
+            {
+                new ReportColumn("MaNV", "Mã NV", HorizontalAlignment.Center),
+                new ReportColumn("Luong", "Lương", "N0", HorizontalAlignment.Right, isSum: true)
+            };
+
+            // Mặc định: có Trang 1/1, không có tổng phụ từng nhóm
+            string htmlDefault = ReportHelper.GenerateHtml(dt, "BẢNG LƯƠNG", groupByColumn: "TenPB", groupPrefix: "Phòng ban: ", columns: cols);
+            Assert.Contains("Trang 1/1", htmlDefault);
+            Assert.Contains("Phòng ban: Kinh doanh (1 bản ghi)", htmlDefault);
+            Assert.Contains("Phòng ban: Khác (1 bản ghi)", htmlDefault);
+            Assert.DoesNotContain("Tổng Kinh doanh:", htmlDefault);
+            Assert.Contains("8,000,000", htmlDefault);
+
+            // Khi bật showGroupTotals = true: hiển thị tổng từng nhóm
+            string htmlSub = ReportHelper.GenerateHtml(dt, "BẢNG LƯƠNG", groupByColumn: "TenPB", groupPrefix: "Phòng ban: ", columns: cols, showGroupTotals: true);
+            Assert.Contains("Tổng Kinh doanh:", htmlSub);
+
+            // Trường hợp chỉ có 1 cột và cột đó có IsSum = true
+            var singleSumCol = new[] { new ReportColumn("Luong", "Lương", "N0", HorizontalAlignment.Right, isSum: true) };
+            string htmlSingle = ReportHelper.GenerateHtml(dt, "TỔNG HỢP", columns: singleSumCol);
+            Assert.Contains("TỔNG CỘNG", htmlSingle);
+            Assert.Contains("8,000,000", htmlSingle);
+
+            // Tắt cột STT (showStt = false) vẫn giữ thẳng cột và tính TỔNG CỘNG chính xác
+            string htmlNoStt = ReportHelper.GenerateHtml(dt, "KHÔNG STT", columns: cols, showStt: false);
+            Assert.DoesNotContain(">STT<", htmlNoStt);
+            Assert.Contains("TỔNG CỘNG", htmlNoStt);
+            Assert.Contains("8,000,000", htmlNoStt);
+
+            string htmlSingleNoStt = ReportHelper.GenerateHtml(dt, "1 CỘT KHÔNG STT", columns: singleSumCol, showStt: false);
+            Assert.DoesNotContain(">STT<", htmlSingleNoStt);
+            Assert.Contains("TỔNG CỘNG", htmlSingleNoStt);
+            Assert.Contains("8,000,000", htmlSingleNoStt);
+        }
+
+        [Fact]
+        public void ReportHelper_ExtractTable_FromBoundAndUnboundGrid_WorksCorrectly()
+        {
+            // 1. DataGridView bind DataTable qua GridHelper (cột ẩn trong DataTable vẫn giữ nguyên)
+            var dt = CreateSampleDataTable();
+            using (var dgvBound = new DataGridView())
+            {
+                GridHelper.Bind(dgvBound, dt,
+                    new GridHelper.GridColumn("MaNV", "Mã NV", 90),
+                    new GridHelper.GridColumn("HoTen", "Họ tên", 150),
+                    new GridHelper.GridColumn("Luong", "Mức lương", 100, "N0", DataGridViewContentAlignment.MiddleRight));
+
+                DataTable extracted = ReportHelper.ExtractTable(dgvBound, out var visCols);
+                Assert.Equal(dt.Columns.Count, extracted.Columns.Count);
+                Assert.Equal(3, extracted.Rows.Count);
+                Assert.Equal(3, visCols.Count);
+                Assert.Equal("Mức lương", visCols[2].HeaderText);
+                Assert.True(visCols[2].IsSum);
+            }
+
+            // 2. DataGridView nhập dữ liệu tay không có DataSource
+            using (var dgvManual = new DataGridView())
+            {
+                dgvManual.Columns.Add(new DataGridViewTextBoxColumn { Name = "Ma", HeaderText = "Mã SP" });
+                dgvManual.Columns.Add(new DataGridViewTextBoxColumn { Name = "Gia", HeaderText = "Đơn giá", ValueType = typeof(decimal) });
+                dgvManual.Rows.Add("SP01", 250000m);
+                dgvManual.Rows.Add("SP02", 150000m);
+
+                DataTable extractedManual = ReportHelper.ExtractTable(dgvManual, out var manualCols);
+                Assert.Equal(2, extractedManual.Rows.Count);
+                Assert.Equal(2, manualCols.Count);
+                Assert.Equal("Mã SP", manualCols[0].HeaderText);
+                Assert.True(manualCols[1].IsSum);
+            }
+        }
+
+        [Fact]
+        public void FormReportViewer_DynamicDesigner_GathersAllFields_Reorders_Hides_Groups_And_Resets()
+        {
+            var dt = CreateSampleDataTable(); // MaNV, HoTen, MaPhong, Luong, HeSoLuong
+
+            using (var viewer = new FormReportViewer(dt, new ReportDesignOptions { ReportTitle = "BÁO CÁO MẪU" }))
+            {
+                // Tự gom tất cả 5 trường trong DataTable vào bảng ban đầu
+                Assert.Equal(5, viewer.VisibleColumns.Count);
+                Assert.Empty(viewer.HiddenColumns);
+                Assert.Contains("BÁO CÁO MẪU", viewer.CurrentHtml);
+                Assert.Contains(">STT<", viewer.CurrentHtml);
+
+                // Sửa tiêu đề, công ty, tắt STT -> CurrentHtml cập nhật ngay
+                viewer.ReportTitle = "BẢNG LƯƠNG THÁNG 11";
+                viewer.ReportCompanyName = "CÔNG TY ABC";
+                viewer.ShowStt = false;
+                Assert.Contains("BẢNG LƯƠNG THÁNG 11", viewer.CurrentHtml);
+                Assert.Contains("CÔNG TY ABC", viewer.CurrentHtml);
+                Assert.DoesNotContain(">STT<", viewer.CurrentHtml);
+
+                // Gom nhóm theo MaPhong -> tự đưa MaPhong sang danh sách ẩn & gom nhóm HTML
+                Assert.True(viewer.SetGroupByColumn("MaPhong"));
+                Assert.Equal("MaPhong", viewer.GroupByColumn);
+                Assert.DoesNotContain(viewer.VisibleColumns, c => c.ColumnName == "MaPhong");
+                Assert.Contains(viewer.HiddenColumns, c => c.ColumnName == "MaPhong");
+                Assert.Contains("IT (2 bản ghi)", viewer.CurrentHtml);
+
+                // Ẩn MaNV & đổi thứ tự cột Luong lên đầu
+                Assert.True(viewer.HideColumn("MaNV"));
+                Assert.DoesNotContain("<th>MaNV</th>", viewer.CurrentHtml);
+                Assert.True(viewer.MoveVisibleColumn("Luong", 0));
+                Assert.Equal("Luong", viewer.VisibleColumns[0].ColumnName);
+
+                // Hiện lại MaNV vào vị trí đầu
+                Assert.True(viewer.ShowColumn("MaNV", 0));
+                Assert.Equal("MaNV", viewer.VisibleColumns[0].ColumnName);
+                Assert.Contains("<th>MaNV</th>", viewer.CurrentHtml);
+
+                // Ẩn hết mọi cột -> báo hướng dẫn sạch, không tự bật lại BuildAutoColumns
+                foreach (var name in new[] { "MaNV", "Luong", "HoTen", "HeSoLuong" })
+                {
+                    viewer.HideColumn(name);
+                }
+                Assert.Empty(viewer.VisibleColumns);
+                Assert.Contains("Chưa chọn cột hiển thị", viewer.CurrentHtml);
+
+                // Nhấn Mặc định -> khôi phục trạng thái ban đầu
+                viewer.ResetDesign();
+                Assert.Equal("BÁO CÁO MẪU", viewer.ReportTitle);
+                Assert.True(viewer.ShowStt);
+                Assert.Equal(5, viewer.VisibleColumns.Count);
+                Assert.Empty(viewer.HiddenColumns);
+                Assert.Contains(">STT<", viewer.CurrentHtml);
+            }
+        }
+
+        [Fact]
+        public void FormReportViewer_WithExplicitSubsetColumns_PlacesExtraFieldsInHiddenList()
+        {
+            var dt = CreateSampleDataTable(); // MaNV, HoTen, MaPhong, Luong, HeSoLuong
+            var options = new ReportDesignOptions
+            {
+                ReportTitle = "DANH SÁCH RÚT GỌN",
+                Columns = new[]
+                {
+                    new ReportColumn("MaNV", "Mã NV"),
+                    new ReportColumn("HoTen", "Họ và tên")
+                }
+            };
+
+            using (var viewer = new FormReportViewer(dt, options))
+            {
+                Assert.Equal(2, viewer.VisibleColumns.Count);
+                Assert.Equal(3, viewer.HiddenColumns.Count);
+                Assert.Contains(viewer.HiddenColumns, c => c.ColumnName == "MaPhong");
+                Assert.Contains(viewer.HiddenColumns, c => c.ColumnName == "Luong");
+                Assert.Contains(viewer.HiddenColumns, c => c.ColumnName == "HeSoLuong");
+
+                // Người dùng có thể kéo cột ẩn (Luong) vào báo cáo ngay lúc xem
+                Assert.True(viewer.ShowColumn("Luong"));
+                Assert.Equal(3, viewer.VisibleColumns.Count);
+                Assert.Contains("30,000,000", viewer.CurrentHtml);
+            }
+        }
+
+        [Fact]
+        public void FormReportViewer_StaRealHandleAndWebBrowser_CreatesDragDropAndPreviewWithoutError()
+        {
+            Exception capturedEx = null;
+            string htmlAfterEdit = null;
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    var dt = CreateSampleDataTable();
+                    using (var viewer = new FormReportViewer(dt, new ReportDesignOptions { ReportTitle = "TEST LIVE UI" }))
+                    using (var closeTimer = new System.Windows.Forms.Timer { Interval = 250 })
+                    {
+                        viewer.ShowInTaskbar = false;
+                        viewer.StartPosition = FormStartPosition.Manual;
+                        viewer.Location = new System.Drawing.Point(-32000, -32000);
+                        closeTimer.Tick += (s, e) =>
+                        {
+                            closeTimer.Stop();
+                            viewer.ReportTitle = "TIÊU ĐỀ MỚI";
+                            viewer.HideColumn("MaPhong");
+                            htmlAfterEdit = viewer.CurrentHtml;
+                            viewer.Close();
+                        };
+                        viewer.Shown += (s, e) => closeTimer.Start();
+                        Application.Run(viewer);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    capturedEx = ex;
+                }
+            });
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.Start();
+            bool finished = thread.Join(8000);
+
+            Assert.True(finished, "FormReportViewer UI thread timed out.");
+            Assert.Null(capturedEx);
+            Assert.NotNull(htmlAfterEdit);
+            Assert.Contains("TIÊU ĐỀ MỚI", htmlAfterEdit);
+            Assert.DoesNotContain("<th>MaPhong</th>", htmlAfterEdit);
+        }
+
+        [Fact]
+        public void ErgonomicAudit_DbHelper_Binding_Validation_DataHelper_Improvements()
+        {
+            // 1. DbHelper.ConnectionString property & Param auto-@ normalization
+            string oldConn = DbHelper.ConnectionString;
+            try
+            {
+                DbHelper.ConnectionString = "Server=localhost;Database=DemoDb;Trusted_Connection=True;";
+                Assert.Equal("Server=localhost;Database=DemoDb;Trusted_Connection=True;", DbHelper.ConnectionString);
+
+                var p = DbHelper.Param("MaNV", "NV01");
+                Assert.Equal("@MaNV", p.ParameterName);
+                Assert.Equal("NV01", p.Value);
+            }
+            finally
+            {
+                DbHelper.ConnectionString = oldConn;
+            }
+
+            // 2. GridHelper.GetSelectedValue đọc được cả cột ẩn trong DataRowView & Bind reset AutoGenerateColumns
+            var dt = CreateSampleDataTable();
+            using (var dgv = new DataGridView())
+            {
+                GridHelper.Bind(dgv, dt,
+                    new GridHelper.GridColumn("MaNV", "Mã NV", 90),
+                    new GridHelper.GridColumn("HoTen", "Họ tên", 150));
+                GridHelper.SetReadOnly(dgv);
+                Assert.True(GridHelper.SelectRowByValue(dgv, "MaNV", "NV02"));
+                Assert.Equal("IT", GridHelper.GetSelectedValue<string>(dgv, "MaPhong"));
+
+                dgv.Columns.Clear();
+                GridHelper.Bind(dgv, dt);
+                Assert.True(dgv.AutoGenerateColumns);
+            }
+
+            // 3. ComboBoxHelper.Bind 2 tham số tự nhận diện cột Value/Display & SelectByValue không throw với giá trị sai
+            var cbo = new ComboBox();
+            ComboBoxHelper.Bind(cbo, dt);
+            Assert.Equal("MaNV", cbo.ValueMember);
+            Assert.Equal("HoTen", cbo.DisplayMember);
+
+            ComboBoxHelper.SelectByValue(cbo, 999);
+
+            // 4. FilterBuilder.SkipIfAllSelected với ComboBoxHelper.BindItems + FormMapper DropDownList
+            var cboTrangThai = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
+            ComboBoxHelper.BindItems(cboTrangThai, "Tất cả", "Đang làm", "Đã nghỉ");
+            Assert.False(FilterBuilder.New().SkipIfAllSelected(cboTrangThai, "TrangThai").HasConditions);
+
+            cboTrangThai.SelectedIndex = 1;
+            var (wStatus, pStatus) = FilterBuilder.New().SkipIfAllSelected(cboTrangThai, "TrangThai").Build();
+            Assert.Equal(" WHERE [TrangThai] = @f0", wStatus);
+            Assert.Equal("Đang làm", pStatus[0].Value);
+
+            var cboDrop = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
+            ComboBoxHelper.BindItems(cboDrop, "Nam", "Nữ");
+            var dtMap = new DataTable();
+            dtMap.Columns.Add("GioiTinh", typeof(string));
+            dtMap.Rows.Add("Nữ");
+            Assert.True(FormMapper.LoadRow(dtMap, FormMapper.Map(cboDrop, "GioiTinh")));
+            Assert.Equal("Nữ", cboDrop.Text);
+
+            // 5. Validator.Selected chặn -1 ở SelectedIndex == 0 & DataHelper.Count an toàn với filter sai
+            var cboPick = new ComboBox();
+            var dtOpts = new DataTable();
+            dtOpts.Columns.Add("Id", typeof(int));
+            dtOpts.Columns.Add("Ten", typeof(string));
+            dtOpts.Rows.Add(1, "Kinh doanh");
+            ComboBoxHelper.BindWithAll(cboPick, dtOpts, "Id", "Ten", "-- Chọn --", -1);
+            Assert.False(Validator.ValidateAll(Validator.Selected(cboPick, "Phòng ban")).IsValid);
+            cboPick.SelectedIndex = 1;
+            Assert.True(Validator.ValidateAll(Validator.Selected(cboPick, "Phòng ban")).IsValid);
+
+            Assert.Equal(3, DataHelper.Count(dt, ""));
+            Assert.Equal(0, DataHelper.Count(dt, "Invalid === Syntax"));
+
+            // 6. CrudHelper.GetAll từ chối ORDER BY injection
+            Assert.Throws<ArgumentException>(() => CrudHelper.GetAll("NhanVien", "MaNV; DROP TABLE NhanVien"));
+        }
+
+        [Fact]
+        public void XlsxExporter_BuildXlsxBytes_ProducesValidOpenXmlWorkbookZip()
+        {
+            var dt = CreateSampleDataTable();
+            byte[] xlsxBytes = ReportHelper.BuildXlsxBytes(
+                dt,
+                reportTitle: "BẢNG LƯƠNG & <TEST>",
+                filterCondition: "Phòng: IT",
+                groupByColumn: "MaPhong",
+                groupPrefix: "Phòng: ",
+                companyName: "CÔNG TY ABC",
+                showGroupTotals: true,
+                showStt: true);
+
+            Assert.True(xlsxBytes.Length > 200);
+            Assert.Equal((byte)'P', xlsxBytes[0]);
+            Assert.Equal((byte)'K', xlsxBytes[1]);
+
+            using (var ms = new System.IO.MemoryStream(xlsxBytes))
+            using (var zip = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Read))
+            {
+                Assert.NotNull(zip.GetEntry("[Content_Types].xml"));
+                Assert.NotNull(zip.GetEntry("_rels/.rels"));
+                Assert.NotNull(zip.GetEntry("xl/workbook.xml"));
+                Assert.NotNull(zip.GetEntry("xl/_rels/workbook.xml.rels"));
+                Assert.NotNull(zip.GetEntry("xl/styles.xml"));
+
+                var sheetEntry = zip.GetEntry("xl/worksheets/sheet1.xml");
+                Assert.NotNull(sheetEntry);
+                using (var sr = new System.IO.StreamReader(sheetEntry.Open()))
+                {
+                    string sheetXml = sr.ReadToEnd();
+                    var doc = System.Xml.Linq.XDocument.Parse(sheetXml);
+                    Assert.NotNull(doc.Root);
+                    Assert.Contains("BẢNG LƯƠNG &amp; &lt;TEST&gt;", sheetXml);
+                    Assert.Contains("Phòng: IT (2 bản ghi)", sheetXml);
+                    Assert.Contains("<v>10000000</v>", sheetXml);
+                    Assert.Contains("<v>30000000</v>", sheetXml);
+                    Assert.Contains("TỔNG CỘNG", sheetXml);
+                    Assert.Contains("mergeCell", sheetXml);
+                }
+            }
+        }
+
+        [Fact]
+        public void FormMapper_AutoBind_AutoLoad_AutoGetValues_AutoClear_And_TypedConversion()
+        {
+            var dtPB = new DataTable();
+            dtPB.Columns.Add("MaPB", typeof(string));
+            dtPB.Columns.Add("TenPB", typeof(string));
+            dtPB.Rows.Add("PB01", "Kinh doanh");
+            dtPB.Rows.Add("PB02", "Kỹ thuật");
+
+            var dtSchema = new DataTable();
+            dtSchema.Columns.Add("MaNV", typeof(string));
+            dtSchema.Columns.Add("HoTen", typeof(string));
+            dtSchema.Columns.Add("GioiTinh", typeof(bool));
+            dtSchema.Columns.Add("NgaySinh", typeof(DateTime));
+            dtSchema.Columns.Add("MaPB", typeof(string));
+            dtSchema.Columns.Add("HeSoLuong", typeof(double));
+            dtSchema.Columns.Add("Luong", typeof(decimal)); // Cột chỉ hiển thị, không có input control
+            dtSchema.Rows.Add("NV001", "Nguyễn An", true, new DateTime(1998, 5, 20), "PB02", 2.34, 5475600m);
+
+            using (var form = new Form())
+            {
+                var grp = new GroupBox();
+                var pnlGender = new Panel();
+                var txtMaNV = new TextBox { Name = "txtMaNV" };
+                var txtHoTen = new TextBox { Name = "txtHoTen" };
+                var rdoNam = new RadioButton { Name = "rdoNam", Tag = "GioiTinh:1" };
+                var rdoNu = new RadioButton { Name = "rdoNu", Tag = "GioiTinh:0" };
+                var dtpNgaySinh = new DateTimePicker { Name = "dtpNgaySinh" };
+                var cboPhongBan = new ComboBox { Name = "cboPhongBan", DropDownStyle = ComboBoxStyle.DropDownList };
+                var txtHeSoLuong = new TextBox { Name = "txtHeSoLuong" };
+                var txtTimKiem = new TextBox { Name = "txtTimKiem", Text = "Bỏ qua" };
+
+                ComboBoxHelper.Bind(cboPhongBan, dtPB, "MaPB", "TenPB");
+                pnlGender.Controls.AddRange(new Control[] { rdoNam, rdoNu });
+                grp.Controls.AddRange(new Control[] { txtMaNV, txtHoTen, pnlGender, dtpNgaySinh, cboPhongBan, txtHeSoLuong });
+                form.Controls.AddRange(new Control[] { grp, txtTimKiem });
+
+                Assert.True(FormMapper.AutoLoad(form, dtSchema));
+                Assert.Equal("NV001", txtMaNV.Text);
+                Assert.Equal("Nguyễn An", txtHoTen.Text);
+                Assert.True(rdoNam.Checked);
+                Assert.False(rdoNu.Checked);
+                Assert.Equal(new DateTime(1998, 5, 20), dtpNgaySinh.Value.Date);
+                Assert.Equal("PB02", cboPhongBan.SelectedValue);
+                Assert.Equal("2.34", txtHeSoLuong.Text);
+
+                // Thay đổi input bằng dấu phẩy VN và RadioButton -> AutoGetValues tự ép đúng kiểu double/bool theo schema
+                txtHeSoLuong.Text = "3,66";
+                rdoNu.Checked = true;
+                ComboBoxHelper.SelectByValue(cboPhongBan, "PB01");
+
+                var values = FormMapper.AutoGetValues(form, dtSchema);
+                Assert.Equal(6, values.Count);
+                Assert.IsType<double>(values["HeSoLuong"]);
+                Assert.Equal(3.66, (double)values["HeSoLuong"], 4);
+                Assert.Equal(false, values["GioiTinh"]);
+                Assert.Equal("PB01", values["MaPB"]);
+                Assert.False(values.ContainsKey("TimKiem"));
+
+                FormMapper.AutoClear(grp);
+                Assert.Equal("", txtMaNV.Text);
+                Assert.Equal("", txtHeSoLuong.Text);
+            }
+        }
+
+        [Fact]
+        public void DbHelper_HasError_ThrowOnError_And_FastTimeoutConnectionTest()
+        {
+            bool oldThrow = DbHelper.ThrowOnError;
+            try
+            {
+                DbHelper.ShowErrorDialog = false;
+                DbHelper.LastError = null;
+                Assert.False(DbHelper.HasError);
+
+                DbHelper.ThrowOnError = true;
+                Assert.Throws<KeyNotFoundException>(() => DbHelper.GetDataTable("SELECT 1", "NonExistentConfigKey_XYZ"));
+                Assert.True(DbHelper.HasError);
+
+                DbHelper.ThrowOnError = false;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                bool ok = DbHelper.TestConnection("Server=192.0.2.1;Database=Missing;", showError: false, timeoutSeconds: 1);
+                sw.Stop();
+                Assert.False(ok);
+                Assert.True(DbHelper.HasError);
+                Assert.True(sw.ElapsedMilliseconds < 6000, $"TestConnection took too long: {sw.ElapsedMilliseconds}ms");
+            }
+            finally
+            {
+                DbHelper.ThrowOnError = oldThrow;
+                DbHelper.LastError = null;
+            }
+        }
+
+        [Fact]
+        public void FormReportViewer_RealUiControls_QuickTitle_Chips_DragDropSimulation_Buttons_And_Reset()
+        {
+            Exception capturedEx = null;
+            string htmlAfterInteractions = null;
+            string htmlAfterReset = null;
+            int chipCountBeforeHide = 0;
+            int chipCountAfterHide = 0;
+            bool sidebarCollapsedAfterToggle = false;
+
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    var dt = CreateSampleDataTable();
+                    using (var viewer = new FormReportViewer(dt, new ReportDesignOptions { ReportTitle = "TIÊU ĐỀ GỐC" }))
+                    using (var runTimer = new System.Windows.Forms.Timer { Interval = 200 })
+                    {
+                        viewer.ShowInTaskbar = false;
+                        viewer.StartPosition = FormStartPosition.Manual;
+                        viewer.Location = new System.Drawing.Point(-32000, -32000);
+
+                        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                        var txtQuickTitle = (TextBox)typeof(FormReportViewer).GetField("_txtQuickTitle", flags).GetValue(viewer);
+                        var txtTitle = (TextBox)typeof(FormReportViewer).GetField("_txtTitle", flags).GetValue(viewer);
+                        var chipStrip = (FlowLayoutPanel)typeof(FormReportViewer).GetField("_chipStrip", flags).GetValue(viewer);
+                        var btnHide = (Button)typeof(FormReportViewer).GetField("_btnHideCol", flags).GetValue(viewer);
+                        var btnShow = (Button)typeof(FormReportViewer).GetField("_btnShowCol", flags).GetValue(viewer);
+                        var btnMoveDown = (Button)typeof(FormReportViewer).GetField("_btnMoveDown", flags).GetValue(viewer);
+                        var btnThietKe = (Button)typeof(FormReportViewer).GetField("_btnThietKe", flags).GetValue(viewer);
+                        var btnDatLai = (Button)typeof(FormReportViewer).GetField("_btnDatLai", flags).GetValue(viewer);
+                        var lstVisible = (ListBox)typeof(FormReportViewer).GetField("_lstVisible", flags).GetValue(viewer);
+                        var pnlQuickGroupDrop = (Panel)typeof(FormReportViewer).GetField("_pnlQuickGroupDrop", flags).GetValue(viewer);
+                        var splitMain = (SplitContainer)typeof(FormReportViewer).GetField("_splitMain", flags).GetValue(viewer);
+                        var debounceTimer = (System.Windows.Forms.Timer)typeof(FormReportViewer).GetField("_debounceTimer", flags).GetValue(viewer);
+
+                        runTimer.Tick += (s, e) =>
+                        {
+                            runTimer.Stop();
+
+                            // 1. Sửa thẳng ô Tiêu đề phía trên bản xem trước -> đồng bộ sang ô bên trái + cập nhật HTML
+                            txtQuickTitle.Text = "TIÊU ĐỀ ĐÃ SỬA";
+                            Assert.Equal("TIÊU ĐỀ ĐÃ SỬA", txtTitle.Text);
+
+                            // 2. Đếm số chip cột trực tiếp trên Preview Strip và bấm nút thật (Hide / MoveDown / Show)
+                            chipCountBeforeHide = chipStrip.Controls.OfType<Panel>().Count();
+                            lstVisible.SelectedIndex = 0; // MaNV
+                            btnMoveDown.PerformClick();
+                            Assert.Equal("MaNV", viewer.VisibleColumns[1].ColumnName);
+
+                            btnHide.PerformClick(); // Ẩn MaNV
+                            chipCountAfterHide = chipStrip.Controls.OfType<Panel>().Count();
+                            Assert.Contains(viewer.HiddenColumns, c => c.ColumnName == "MaNV");
+
+                            // 3. Mở lại MaNV bằng nút Show thật
+                            btnShow.PerformClick();
+                            Assert.Equal(5, viewer.VisibleColumns.Count);
+
+                            // 4. Giả lập DragEventArgs thả trực tiếp payload cột MaPhong vào vùng _pnlQuickGroupDrop
+                            var payloadType = typeof(FormReportViewer).GetNestedType("ColumnDragPayload", flags);
+                            var maPhongCol = viewer.VisibleColumns.First(c => c.ColumnName == "MaPhong");
+                            object payload = Activator.CreateInstance(payloadType, maPhongCol, lstVisible, 2);
+                            var dataObj = new DataObject();
+                            dataObj.SetData(payloadType, payload);
+                            var dragArgs = new DragEventArgs(dataObj, 0, 0, 0, DragDropEffects.Move, DragDropEffects.Move);
+                            var onDragDrop = typeof(Control).GetMethod("OnDragDrop", flags);
+                            onDragDrop.Invoke(pnlQuickGroupDrop, new object[] { dragArgs });
+                            Assert.Equal("MaPhong", viewer.GroupByColumn);
+
+                            // 5. Ép debounce tick / EnsurePrintable trước khi đọc HTML
+                            typeof(FormReportViewer).GetMethod("EnsurePrintable", flags).Invoke(viewer, null);
+                            htmlAfterInteractions = viewer.CurrentHtml;
+
+                            // 6. Toggle nút Ẩn/Hiện panel Thiết kế bên trái + bấm Mặc định
+                            btnThietKe.PerformClick();
+                            sidebarCollapsedAfterToggle = splitMain.Panel1Collapsed;
+
+                            btnDatLai.PerformClick();
+                            htmlAfterReset = viewer.CurrentHtml;
+
+                            viewer.Close();
+                        };
+
+                        viewer.Shown += (s, e) => runTimer.Start();
+                        Application.Run(viewer);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    capturedEx = ex;
+                }
+            });
+            thread.SetApartmentState(System.Threading.ApartmentState.STA);
+            thread.Start();
+            bool finished = thread.Join(10000);
+
+            Assert.True(finished, "FormReportViewer UI interaction test timed out.");
+            Assert.Null(capturedEx);
+            Assert.Equal(5, chipCountBeforeHide);
+            Assert.Equal(4, chipCountAfterHide);
+            Assert.True(sidebarCollapsedAfterToggle);
+            Assert.Contains("TIÊU ĐỀ ĐÃ SỬA", htmlAfterInteractions);
+            Assert.Contains("IT (2 bản ghi)", htmlAfterInteractions);
+            Assert.Contains("TIÊU ĐỀ GỐC", htmlAfterReset);
+        }
+
+        [Fact]
+        public void ReportHelper_PrepareReportTable_AddsSequentialStt()
+        {
+            var dt = CreateSampleDataTable();
+            DataTable prepared = ReportHelper.PrepareReportTable(dt);
+
+            Assert.Equal("STT", prepared.Columns[0].ColumnName);
+            Assert.Equal(1, prepared.Rows[0]["STT"]);
+            Assert.Equal(2, prepared.Rows[1]["STT"]);
+            Assert.Equal(3, prepared.Rows[2]["STT"]);
+        }
+
+        [Fact]
+        public void ReportHelper_BindRdlc_And_RenderRdlcBytes_WorksViaReflection()
+        {
+            var viewer = new MockReportViewer();
+            var dt = CreateSampleDataTable();
+            var parms = new Dictionary<string, string>
+            {
+                { "pDieuKien", "Phòng ban: Tất cả" },
+                { "pNgayLap", "27/11/2026" }
+            };
+
+            ReportHelper.BindRdlc(viewer, "dsNhanVien", dt, parms, reportEmbeddedResource: "App.rptBangLuong.rdlc");
+
+            Assert.Equal("App.rptBangLuong.rdlc", viewer.LocalReport.ReportEmbeddedResource);
+            Assert.Single(viewer.LocalReport.DataSources);
+            Assert.Equal("dsNhanVien", viewer.LocalReport.DataSources[0].Name);
+            Assert.Equal(2, viewer.LocalReport.Parameters.Count);
+            Assert.True(viewer.Refreshed);
+
+            byte[] pdfBytes = ReportHelper.RenderRdlcBytes(viewer, "PDF");
+            Assert.Equal(new byte[] { 1, 2, 3 }, pdfBytes);
+        }
+
+        [Fact]
+        public void Upgrades_Validation_DataHelper_ComboBox_And_FormMapper_RadioPair()
+        {
+            // 1. DataHelper.TryParseDecimal hỗ trợ nhiều dấu chấm kiểu VN ("1.500.000")
+            Assert.True(DataHelper.TryParseDecimal("1.500.000", out decimal vnMoney));
+            Assert.Equal(1500000m, vnMoney);
+
+            // 2. Validator.Pattern tự trim khoảng trắng thừa và NotFutureDate
+            var txtMa = new TextBox { Text = "  NV008  " };
+            var dtpFuture = new DateTimePicker { Value = DateTime.Today.AddDays(1) };
+            Assert.True(Validator.ValidateAll(Validator.Pattern(txtMa, "Mã NV", @"^NV\d{3}$")).IsValid);
+            Assert.False(Validator.ValidateAll(Validator.NotFutureDate(dtpFuture, "Ngày nhập")).IsValid);
+
+            // 3. ComboBoxHelper.SelectByValue khớp chuỗi có khoảng trắng thừa từ NCHAR
+            var dtPB = new DataTable();
+            dtPB.Columns.Add("MaPB", typeof(string));
+            dtPB.Columns.Add("TenPB", typeof(string));
+            dtPB.Rows.Add("PB01   ", "Kinh doanh");
+            dtPB.Rows.Add("PB02   ", "Kế toán");
+            var cbo = new ComboBox();
+            ComboBoxHelper.Bind(cbo, dtPB, "MaPB", "TenPB");
+            ComboBoxHelper.SelectByValue(cbo, "pb02");
+            Assert.Equal(1, cbo.SelectedIndex);
+
+            // 4. FormMapper cặp RadioButton Nam/Nữ
+            var grp = new GroupBox();
+            var rdoNam = new RadioButton { Checked = true };
+            var rdoNu = new RadioButton { Checked = false };
+            grp.Controls.Add(rdoNam);
+            grp.Controls.Add(rdoNu);
+
+            var dtNV = new DataTable();
+            dtNV.Columns.Add("GioiTinh", typeof(bool));
+            dtNV.Rows.Add(false);
+
+            FormMapper.LoadRow(dtNV.Rows[0], FormMapper.Map(rdoNam, rdoNu, "GioiTinh"));
+            Assert.False(rdoNam.Checked);
+            Assert.True(rdoNu.Checked);
+
+            var values = FormMapper.GetValues(FormMapper.Map(rdoNam, rdoNu, "GioiTinh"));
+            Assert.Equal(false, values["GioiTinh"]);
+        }
+
+        [Fact]
+        public void StudentRoleplay_RootUpgrades_AllWorkTogetherCleanly()
+        {
+            // 1. FormMapper typed numeric mapping ("2,34" -> double 2.34, "1.500.000" -> decimal 1500000m)
+            var txtHeSo = new TextBox { Text = "2,34" };
+            var txtLuong = new TextBox { Text = "1.500.000" };
+            var txtOptional = new TextBox { Text = "   " };
+
+            var dict = FormMapper.GetValues(
+                FormMapper.MapDouble(txtHeSo, "HeSoLuong"),
+                FormMapper.MapDecimal(txtLuong, "DonGia"),
+                FormMapper.MapInt(txtOptional, "PhuCap", nullable: true)
+            );
+            Assert.IsType<double>(dict["HeSoLuong"]);
+            Assert.Equal(2.34, (double)dict["HeSoLuong"], 4);
+            Assert.IsType<decimal>(dict["DonGia"]);
+            Assert.Equal(1500000m, dict["DonGia"]);
+            Assert.Equal(DBNull.Value, dict["PhuCap"]);
+
+            // 2. FormMapper.LoadRow fallback cho ComboBox khi thiếu MaPB trong SELECT nhưng có TenPB
+            var dtPB = new DataTable();
+            dtPB.Columns.Add("MaPB", typeof(string));
+            dtPB.Columns.Add("TenPB", typeof(string));
+            dtPB.Rows.Add("PB01", "Kinh doanh");
+            dtPB.Rows.Add("PB02", "Kế toán");
+            var cbo = new ComboBox();
+            ComboBoxHelper.Bind(cbo, dtPB, "MaPB", "TenPB");
+
+            var dtRowWithoutKey = new DataTable();
+            dtRowWithoutKey.Columns.Add("MaNV", typeof(string));
+            dtRowWithoutKey.Columns.Add("TenPB", typeof(string));
+            dtRowWithoutKey.Rows.Add("NV001", "Kế toán");
+
+            FormMapper.LoadRow(dtRowWithoutKey.Rows[0], FormMapper.Map(cbo, "MaPB"));
+            Assert.Equal("PB02", ComboBoxHelper.GetSelectedValue<string>(cbo));
+
+            // 3. ComboBoxHelper graceful handling khi DataTable rỗng hoàn toàn (0 cột do lỗi kết nối)
+            var emptyBrokenDt = new DataTable();
+            ComboBoxHelper.Bind(cbo, emptyBrokenDt, "MaPB", "TenPB");
+            Assert.Empty(cbo.Items);
+            ComboBoxHelper.BindWithAll(cbo, emptyBrokenDt, "MaPB", "TenPB", "Tất cả");
+            Assert.Single(cbo.Items);
+            Assert.Equal("Tất cả", cbo.Text);
+
+            // 4. ComboBoxHelper.BindItems nạp danh sách tĩnh không trùng lặp
+            var cboGioiTinh = new ComboBox();
+            ComboBoxHelper.BindItems(cboGioiTinh, "Tất cả", "Nam", "Nữ");
+            ComboBoxHelper.BindItems(cboGioiTinh, "Tất cả", "Nam", "Nữ");
+            Assert.Equal(3, cboGioiTinh.Items.Count);
+            Assert.Equal("Tất cả", cboGioiTinh.Text);
+
+            // 5. GridHelper.ClearSelection & SelectRowByValue
+            var dtGrid = CreateSampleDataTable();
+            var dgv = new DataGridView();
+            GridHelper.Bind(dgv, dtGrid,
+                new GridHelper.GridColumn("MaNV", "Mã NV", 90),
+                new GridHelper.GridColumn("HoTen", "Họ tên", 150));
+            GridHelper.SetReadOnly(dgv);
+            Assert.True(GridHelper.SelectRowByValue(dgv, "MaNV", "NV02"));
+            Assert.Equal("NV02", GridHelper.GetSelectedValue<string>(dgv, "MaNV"));
+            GridHelper.ClearSelection(dgv);
+            Assert.False(GridHelper.HasSelection(dgv));
+
+            // 6. Validator.AgeRangeAtDate với ReferenceControl trực tiếp + DateBeforeOrEqual
+            var dtpBirth = new DateTimePicker { Value = new DateTime(2002, 5, 15) };
+            var dtpHire = new DateTimePicker { Value = new DateTime(2020, 5, 14) }; // chưa đủ 18 tuổi
+            var failAge = Validator.ValidateAll(
+                Validator.DateBeforeOrEqual(dtpBirth, dtpHire, "Ngày sinh"),
+                Validator.AgeRangeAtDate(dtpBirth, dtpHire, "Tuổi", 18, 120, "Phải đủ 18 tuổi")
+            );
+            Assert.False(failAge.IsValid);
+            Assert.Equal("Phải đủ 18 tuổi", failAge.ErrorMessage);
+
+            dtpHire.Value = new DateTime(2020, 5, 15); // đúng ngày tròn 18 tuổi
+            var passAge = Validator.ValidateAll(
+                Validator.DateBeforeOrEqual(dtpBirth, dtpHire, "Ngày sinh"),
+                Validator.AgeRangeAtDate(dtpBirth, dtpHire, "Tuổi", 18, 120)
+            );
+            Assert.True(passAge.IsValid);
+
+            // 7. FormHelper.FormatDatePickers
+            FormHelper.FormatDatePickers(dtpBirth, dtpHire);
+            Assert.Equal(DateTimePickerFormat.Custom, dtpBirth.Format);
+            Assert.Equal("dd/MM/yyyy", dtpBirth.CustomFormat);
+
+            // 8. DbHelper.SetConnectionStringFromConfig đọc file XML config
+            string tempCfg = System.IO.Path.GetTempFileName();
+            try
+            {
+                System.IO.File.WriteAllText(tempCfg,
+                    "<configuration><connectionStrings><add name=\"QLNhanSu\" connectionString=\"Server=.;Database=QLNhanSu;Trusted_Connection=True;\" /></connectionStrings></configuration>");
+                bool loaded = DbHelper.SetConnectionStringFromConfig("QLNhanSu", "cfgTest", tempCfg);
+                Assert.True(loaded);
+                Assert.False(DbHelper.TestConnection("NonExistentDbKey", showError: false));
+                Assert.NotNull(DbHelper.LastError);
+            }
+            finally
+            {
+                if (System.IO.File.Exists(tempCfg)) System.IO.File.Delete(tempCfg);
+            }
+
+            // 9. Crystal Report Reflection binding
+            var crystalViewer = new MockCrystalReportViewer();
+            var rptDoc = new MockCrystalReportDocument();
+            ReportHelper.BindCrystalReport(crystalViewer, rptDoc, dtGrid, new Dictionary<string, object> { { "pDieuKien", "Tất cả" } });
+            Assert.Same(dtGrid, rptDoc.DataSource);
+            Assert.Equal("Tất cả", rptDoc.Params["pDieuKien"]);
+            Assert.Same(rptDoc, crystalViewer.ReportSource);
+            Assert.True(crystalViewer.Refreshed);
+        }
+
+        [Fact]
+        public void GridHelper_SelectionChanged_ReadsSelectedRow_And_MessageHelper_SuppressDialogs()
+        {
+            // Kiểm tra GetSelectedRow lấy đúng SelectedRows[0] trong sự kiện SelectionChanged khi Form đã tạo Handle
+            var dt = CreateSampleDataTable();
+            using (var form = new Form())
+            {
+                var dgv = new DataGridView { Dock = DockStyle.Fill };
+                form.Controls.Add(dgv);
+                form.CreateControl();
+                GridHelper.Bind(dgv, dt,
+                    new GridHelper.GridColumn("MaNV", "Mã NV", 90),
+                    new GridHelper.GridColumn("HoTen", "Họ tên", 150));
+                GridHelper.SetReadOnly(dgv);
+
+                string capturedDuringEvent = null;
+                dgv.SelectionChanged += (s, e) =>
+                {
+                    capturedDuringEvent = GridHelper.GetSelectedValue<string>(dgv, "MaNV");
+                };
+
+                Assert.True(GridHelper.SelectRowByValue(dgv, "MaNV", "NV02"));
+                Assert.Equal("NV02", capturedDuringEvent);
+            }
+
+            // Kiểm tra MessageHelper.SuppressDialogs & LastMessage
+            try
+            {
+                MessageHelper.SuppressDialogs = true;
+                MessageHelper.AutoConfirmResult = false;
+                Assert.False(MessageHelper.ConfirmDelete("nhân viên NV01"));
+                Assert.Equal("Bạn có chắc chắn muốn xóa nhân viên NV01 không?", MessageHelper.LastMessage);
+
+                MessageHelper.AutoConfirmResult = true;
+                Assert.True(MessageHelper.Confirm("Bạn có muốn thoát không?"));
+                MessageHelper.Success("thêm mới");
+                Assert.Equal("Thao tác thêm mới thành công!", MessageHelper.LastMessage);
+            }
+            finally
+            {
+                MessageHelper.SuppressDialogs = false;
+                MessageHelper.AutoConfirmResult = true;
+            }
+        }
+
+        #endregion
+
+        #region 9. Kiểm thử Multi-DB, Validator.FromSchema, Report đa thống kê & FormGenericManager
+
+        [Fact]
+        public void MultiDb_Dialects_FilterBuilder_And_QuoteIdentifier_WorkAcrossEngines()
+        {
+            Assert.Equal(DbDialect.MySql, DbHelper.DetectDialect("Server=localhost;Database=shop;Uid=root;Pwd=123;", null));
+            Assert.Equal(DbDialect.Sqlite, DbHelper.DetectDialect("Data Source=C:\\data\\exam.db;Mode=ReadWriteCreate", null));
+            Assert.Equal(DbDialect.PostgreSql, DbHelper.DetectDialect("Host=localhost;Port=5432;Database=exam;Username=pg", null));
+            Assert.Equal(DbDialect.OleDb, DbHelper.DetectDialect("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=db.accdb;", null));
+            Assert.Equal(DbDialect.Odbc, DbHelper.DetectDialect("Driver={MySQL ODBC 8.0};Server=localhost;", null));
+            Assert.Equal(DbDialect.SqlServer, DbHelper.DetectDialect("Server=(localdb)\\MSSQLLocalDB;Database=QLNhanSu;Trusted_Connection=True;", null));
+
+            Assert.Equal("`nv`.`HoTen`", DbHelper.QuoteIdentifier("nv.HoTen", DbDialect.MySql));
+            Assert.Equal("\"nv\".\"HoTen\"", DbHelper.QuoteIdentifier("nv.HoTen", DbDialect.Sqlite));
+            Assert.Equal("\"nv\".\"HoTen\"", DbHelper.QuoteIdentifier("nv.HoTen", DbDialect.PostgreSql));
+            Assert.Equal("[nv].[HoTen]", DbHelper.QuoteIdentifier("nv.HoTen", DbDialect.SqlServer));
+
+            Assert.Equal("SELECT last_insert_rowid()", DbHelper.GetLastInsertIdSql(DbDialect.Sqlite));
+            Assert.Equal("SELECT LAST_INSERT_ID()", DbHelper.GetLastInsertIdSql(DbDialect.MySql));
+            Assert.Equal("SELECT LASTVAL()", DbHelper.GetLastInsertIdSql(DbDialect.PostgreSql));
+            Assert.Equal("SELECT @@IDENTITY", DbHelper.GetLastInsertIdSql(DbDialect.OleDb));
+
+            var (mySqlWhere, _) = FilterBuilder.New(DbDialect.MySql)
+                .Equal("MaPB", "IT")
+                .ContainsAny(new[] { "nv.HoTen", "MaNV" }, "An")
+                .Build();
+            Assert.Equal(" WHERE `MaPB` = @f0 AND (`nv`.`HoTen` LIKE @f1 OR `MaNV` LIKE @f1)", mySqlWhere);
+
+            try
+            {
+                DbHelper.SetConnectionString("test_pg", "Host=localhost;Port=5432;Database=app;Username=u", dialect: DbDialect.PostgreSql);
+                var (pgWhere, _) = FilterBuilder.ForConnection("test_pg").Equal("TenSP", "Laptop").Build();
+                Assert.Equal(" WHERE \"TenSP\" = @f0", pgWhere);
+            }
+            finally
+            {
+                DbHelper.SetConnectionString("test_pg", null);
+            }
+        }
+
+        [Fact]
+        public void DbHelper_MockProvider_HandlesNullAdapterFallback_OleDbPositionalRewrite_And_SchemaDiscovery()
+        {
+            var products = new DataTable("SanPham");
+            products.Columns.Add(new DataColumn("MaSP", typeof(string)) { MaxLength = 10, AllowDBNull = false });
+            products.Columns.Add(new DataColumn("TenSP", typeof(string)) { MaxLength = 120, AllowDBNull = false });
+            products.Columns.Add(new DataColumn("DonGia", typeof(decimal)) { AllowDBNull = false });
+            products.Columns.Add(new DataColumn("NgayNhap", typeof(DateTime)) { AllowDBNull = true });
+            products.Columns.Add(new DataColumn("ConHang", typeof(bool)) { AllowDBNull = false });
+            products.PrimaryKey = new[] { products.Columns["MaSP"] };
+            products.Rows.Add("SP01", "Laptop A", 15000000m, new DateTime(2026, 5, 1), true);
+            products.Rows.Add("SP02", "Chuột B", 250000m, DBNull.Value, false);
+
+            var orders = new DataTable("DonHang");
+            orders.Columns.Add(new DataColumn("MaDH", typeof(int)) { AutoIncrement = true, AllowDBNull = false });
+            orders.Columns.Add(new DataColumn("GhiChu", typeof(string)) { MaxLength = 200, AllowDBNull = true });
+            orders.PrimaryKey = new[] { orders.Columns["MaDH"] };
+            orders.Rows.Add(1, "Giao gấp");
+
+            var factory = new MockDbProviderFactory(new Dictionary<string, DataTable>
+            {
+                { "SanPham", products },
+                { "DonHang", orders }
+            });
+
+            try
+            {
+                // 1. OleDb dialect: adapter == null -> reader fallback + @param -> ? rewrite (không đụng chuỗi trong '...')
+                DbHelper.SetConnectionString("mock_ole", "Provider=Mock;Data Source=test.accdb;", factory, DbDialect.OleDb);
+                DataTable loaded = DbHelper.GetDataTable(
+                    "SELECT * FROM [SanPham] WHERE Email <> 'a@b.c' AND MaSP = @id AND DonGia > @min AND MaSP <> @id",
+                    "mock_ole",
+                    DbHelper.Param("id", "SP01"),
+                    DbHelper.Param("min", 1000m));
+
+                Assert.Equal(2, loaded.Rows.Count);
+                Assert.Equal("SELECT * FROM [SanPham] WHERE Email <> 'a@b.c' AND MaSP = ? AND DonGia > ? AND MaSP <> ?", factory.LastCommandText);
+                Assert.Equal(3, factory.LastParameters.Count);
+                Assert.Equal("SP01", factory.LastParameters[0].Value);
+                Assert.Equal(1000m, factory.LastParameters[1].Value);
+                Assert.Equal("SP01", factory.LastParameters[2].Value);
+
+                // 2. GetTableNames & GetTableSchema hoạt động trên provider generic
+                List<string> tables = DbHelper.GetTableNames("mock_ole");
+                Assert.Contains("SanPham", tables);
+                Assert.Contains("DonHang", tables);
+
+                DataTable schema = DbHelper.GetTableSchema("SanPham", "mock_ole");
+                Assert.Equal(5, schema.Columns.Count);
+                Assert.Single(schema.PrimaryKey);
+                Assert.Equal("MaSP", schema.PrimaryKey[0].ColumnName);
+                Assert.False(schema.Columns["MaSP"].AllowDBNull);
+                Assert.Equal(10, schema.Columns["MaSP"].MaxLength);
+
+                // 3. FormGenericManager tự dựng giao diện theo bất kỳ bảng/schema nào và chuyển bảng động
+                using (var mgr = new FormGenericManager("SanPham", "mock_ole"))
+                {
+                    Assert.Equal("SanPham", mgr.CurrentTable);
+                    Assert.IsType<TextBox>(mgr.FindFieldControl("MaSP"));
+                    Assert.IsType<DateTimePicker>(mgr.FindFieldControl("NgayNhap"));
+                    Assert.IsType<CheckBox>(mgr.FindFieldControl("ConHang"));
+                    Assert.Equal(10, ((TextBox)mgr.FindFieldControl("MaSP")).MaxLength);
+                    Assert.True(((DateTimePicker)mgr.FindFieldControl("NgayNhap")).ShowCheckBox);
+                    Assert.Equal(2, mgr.Grid.Rows.Count);
+
+                    Assert.True(mgr.SelectTable("DonHang"));
+                    Assert.Equal("DonHang", mgr.CurrentTable);
+                    Assert.True(((TextBox)mgr.FindFieldControl("MaDH")).ReadOnly);
+                    Assert.Null(mgr.FindFieldControl("MaSP"));
+                }
+            }
+            finally
+            {
+                DbHelper.SetConnectionString("mock_ole", null);
+            }
+        }
+
+        [Fact]
+        public void Validator_FromSchema_EnforcesRequiredMaxLengthTypes_And_SkipsAutoIncrement()
+        {
+            var schema = new DataTable("HangHoa");
+            schema.Columns.Add(new DataColumn("Id", typeof(int)) { AutoIncrement = true, AllowDBNull = false });
+            schema.Columns.Add(new DataColumn("MaHH", typeof(string)) { MaxLength = 5, AllowDBNull = false });
+            schema.Columns.Add(new DataColumn("SoLuong", typeof(int)) { AllowDBNull = false });
+            schema.Columns.Add(new DataColumn("DonGia", typeof(decimal)) { AllowDBNull = true });
+
+            using (var container = new Panel())
+            {
+                var txtId = new TextBox { Name = "txtId", Text = "" };
+                var txtMa = new TextBox { Name = "txtMaHH", Text = "" };
+                var txtSl = new TextBox { Name = "txtSoLuong", Text = "10" };
+                var txtGia = new TextBox { Name = "txtDonGia", Text = "50000" };
+                container.Controls.AddRange(new Control[] { txtId, txtMa, txtSl, txtGia });
+
+                Assert.False(Validator.FromSchema(container, schema).IsValid);
+
+                txtMa.Text = "TOOLONG123";
+                Assert.False(Validator.FromSchema(container, schema).IsValid);
+
+                txtMa.Text = "HH01";
+                txtSl.Text = "abc";
+                Assert.False(Validator.FromSchema(container, schema).IsValid);
+
+                txtSl.Text = "10";
+                txtGia.Text = "khong_phai_so";
+                Assert.False(Validator.FromSchema(container, schema).IsValid);
+
+                txtGia.Text = "125000";
+                Assert.True(Validator.FromSchema(container, schema).IsValid);
+                Assert.False(Validator.FromSchema(container, schema,
+                    Validator.Custom(txtSl, "Số lượng", v => int.Parse(v) > 100, "Phải > 100")).IsValid);
+            }
+        }
+
+        [Fact]
+        public void ReportHelper_And_FormReportViewer_SupportMultiSummaryModes_Landscape_And_FontSize()
+        {
+            var dt = new DataTable();
+            dt.Columns.Add("MaNV", typeof(string));
+            dt.Columns.Add("Phong", typeof(string));
+            dt.Columns.Add("Luong", typeof(decimal));
+            dt.Columns.Add("Diem", typeof(decimal));
+            dt.Rows.Add("NV01", "IT", 1000m, 8m);
+            dt.Rows.Add("NV02", "IT", 2000m, 10m);
+            dt.Rows.Add("NV03", "HR", 3000m, 6m);
+
+            var cols = new[]
+            {
+                new ReportColumn("MaNV", "Mã NV", null, HorizontalAlignment.Center, ReportSummaryMode.Count),
+                new ReportColumn("Luong", "Lương TB", "N0", HorizontalAlignment.Right, ReportSummaryMode.Average),
+                new ReportColumn("Diem", "Điểm Max", "0.#", HorizontalAlignment.Right, ReportSummaryMode.Max)
+            };
+
+            string html = ReportHelper.GenerateHtml(dt, "THỐNG KÊ ĐA CHẾ ĐỘ", groupByColumn: "Phong",
+                columns: cols, showGroupTotals: true, landscape: true, fontSizePt: 16);
+
+            Assert.Contains("@page { size: A4 landscape;", html);
+            Assert.Contains("font-size: 16px;", html);
+            Assert.Contains("Đếm: 3", html);
+            Assert.Contains("TB: 2,000", html);
+            Assert.Contains("Max: 10", html);
+            Assert.Contains("Thống kê IT:", html);
+            Assert.Contains("THỐNG KÊ", html);
+
+            byte[] xlsx = ReportHelper.BuildXlsxBytes(dt, "THỐNG KÊ ĐA CHẾ ĐỘ", columns: cols,
+                landscape: true, fontSizePt: 16);
+            using (var ms = new MemoryStream(xlsx))
+            using (var zip = new ZipArchive(ms, ZipArchiveMode.Read))
+            {
+                string sheetXml;
+                using (var sr = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml").Open()))
+                    sheetXml = sr.ReadToEnd();
+                string stylesXml;
+                using (var sr = new StreamReader(zip.GetEntry("xl/styles.xml").Open()))
+                    stylesXml = sr.ReadToEnd();
+
+                Assert.Contains("orientation=\"landscape\"", sheetXml);
+                Assert.Contains("TB: 2,000", sheetXml);
+                Assert.Contains("<sz val=\"14\"/>", stylesXml);
+            }
+
+            // Kiểm chứng control thực tế trên FormReportViewer trong luồng STA
+            Exception capturedEx = null;
+            string htmlAfterFormEdit = null;
+            var sta = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                    using (var viewer = new FormReportViewer(dt, new ReportDesignOptions { ReportTitle = "TEST MODES", OpenDesigner = true }))
+                    using (var timer = new System.Windows.Forms.Timer { Interval = 100 })
+                    {
+                        timer.Tick += (s, e) =>
+                        {
+                            timer.Stop();
+                            var cboPaper = (ComboBox)typeof(FormReportViewer).GetField("_cboPaperOrientation", flags).GetValue(viewer);
+                            var nudFont = (NumericUpDown)typeof(FormReportViewer).GetField("_nudFontSize", flags).GetValue(viewer);
+                            var cboSummary = (ComboBox)typeof(FormReportViewer).GetField("_cboColSummary", flags).GetValue(viewer);
+                            var lstVis = (ListBox)typeof(FormReportViewer).GetField("_lstVisible", flags).GetValue(viewer);
+
+                            int luongIdx = -1;
+                            for (int i = 0; i < lstVis.Items.Count; i++)
+                            {
+                                if (((ReportColumn)lstVis.Items[i]).ColumnName == "Luong") { luongIdx = i; break; }
+                            }
+                            Assert.True(luongIdx >= 0);
+                            lstVis.SelectedIndex = luongIdx;
+                            cboSummary.SelectedIndex = (int)ReportSummaryMode.Average;
+                            cboPaper.SelectedIndex = 1; // A4 Ngang
+                            nudFont.Value = 15;
+
+                            typeof(FormReportViewer).GetMethod("EnsurePrintable", flags).Invoke(viewer, null);
+                            htmlAfterFormEdit = viewer.CurrentHtml;
+                            viewer.Close();
+                        };
+                        viewer.Shown += (s, e) => timer.Start();
+                        Application.Run(viewer);
+                    }
+                }
+                catch (Exception ex) { capturedEx = ex; }
+            });
+            sta.SetApartmentState(System.Threading.ApartmentState.STA);
+            sta.Start();
+            Assert.True(sta.Join(10000));
+            Assert.Null(capturedEx);
+            Assert.Contains("size: A4 landscape", htmlAfterFormEdit);
+            Assert.Contains("font-size: 15px;", htmlAfterFormEdit);
+            Assert.Contains("TB: 2,000", htmlAfterFormEdit);
+        }
+
         #endregion
     }
+
+    #region Mock DbProviderFactory for Multi-DB & Generic Schema Testing
+
+    internal sealed class MockDbProviderFactory : DbProviderFactory
+    {
+        private readonly Dictionary<string, DataTable> _tables;
+        public string LastCommandText { get; private set; }
+        public List<DbParameter> LastParameters { get; } = new List<DbParameter>();
+
+        public MockDbProviderFactory(Dictionary<string, DataTable> tables)
+        {
+            _tables = tables;
+        }
+
+        public override DbConnection CreateConnection() => new MockDbConnection(this);
+        public override DbCommand CreateCommand() => new MockDbCommand(this);
+        public override DbDataAdapter CreateDataAdapter() => null; // Cố tình trả null giống Microsoft.Data.Sqlite
+
+        internal DataTable ResolveTableForSql(string sql)
+        {
+            foreach (var kvp in _tables)
+            {
+                if (sql != null && sql.IndexOf(kvp.Key, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return kvp.Value;
+            }
+            return _tables.Values.FirstOrDefault() ?? new DataTable();
+        }
+
+        internal DataTable GetTablesCatalog()
+        {
+            var dt = new DataTable("Tables");
+            dt.Columns.Add("TABLE_NAME", typeof(string));
+            dt.Columns.Add("TABLE_TYPE", typeof(string));
+            foreach (var name in _tables.Keys)
+                dt.Rows.Add(name, "TABLE");
+            return dt;
+        }
+
+        internal void RecordExecution(string sql, DbParameterCollection parms)
+        {
+            LastCommandText = sql;
+            LastParameters.Clear();
+            foreach (DbParameter p in parms)
+                LastParameters.Add(new MockDbParameter { ParameterName = p.ParameterName, Value = p.Value });
+        }
+    }
+
+    internal sealed class MockDbConnection : DbConnection
+    {
+        private readonly MockDbProviderFactory _factory;
+        private ConnectionState _state = ConnectionState.Closed;
+
+        public MockDbConnection(MockDbProviderFactory factory) => _factory = factory;
+        public override string ConnectionString { get; set; }
+        public override string Database => "MockDB";
+        public override string DataSource => "MockHost";
+        public override string ServerVersion => "1.0";
+        public override ConnectionState State => _state;
+        public override void ChangeDatabase(string databaseName) { }
+        public override void Close() => _state = ConnectionState.Closed;
+        public override void Open() => _state = ConnectionState.Open;
+        protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel) => throw new NotSupportedException();
+        protected override DbCommand CreateDbCommand() => new MockDbCommand(_factory) { Connection = this };
+        public override DataTable GetSchema(string collectionName)
+            => string.Equals(collectionName, "Tables", StringComparison.OrdinalIgnoreCase) ? _factory.GetTablesCatalog() : new DataTable();
+    }
+
+    internal sealed class MockDbCommand : DbCommand
+    {
+        private readonly MockDbProviderFactory _factory;
+        private readonly MockDbParameterCollection _parms = new MockDbParameterCollection();
+
+        public MockDbCommand(MockDbProviderFactory factory) => _factory = factory;
+        public override string CommandText { get; set; }
+        public override int CommandTimeout { get; set; }
+        public override CommandType CommandType { get; set; } = CommandType.Text;
+        public override UpdateRowSource UpdatedRowSource { get; set; }
+        protected override DbConnection DbConnection { get; set; }
+        protected override DbParameterCollection DbParameterCollection => _parms;
+        protected override DbTransaction DbTransaction { get; set; }
+        public override bool DesignTimeVisible { get; set; }
+        public override void Cancel() { }
+        public override void Prepare() { }
+        protected override DbParameter CreateDbParameter() => new MockDbParameter();
+
+        public override int ExecuteNonQuery()
+        {
+            _factory.RecordExecution(CommandText, _parms);
+            return 1;
+        }
+
+        public override object ExecuteScalar()
+        {
+            _factory.RecordExecution(CommandText, _parms);
+            return 1;
+        }
+
+        protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior)
+        {
+            _factory.RecordExecution(CommandText, _parms);
+            DataTable src = _factory.ResolveTableForSql(CommandText);
+            return (behavior & CommandBehavior.SchemaOnly) == CommandBehavior.SchemaOnly
+                ? src.Clone().CreateDataReader()
+                : src.CreateDataReader();
+        }
+    }
+
+    internal sealed class MockDbParameter : DbParameter
+    {
+        public override DbType DbType { get; set; }
+        public override ParameterDirection Direction { get; set; } = ParameterDirection.Input;
+        public override bool IsNullable { get; set; }
+        public override string ParameterName { get; set; }
+        public override int Size { get; set; }
+        public override string SourceColumn { get; set; }
+        public override bool SourceColumnNullMapping { get; set; }
+        public override object Value { get; set; }
+        public override void ResetDbType() { }
+    }
+
+    internal sealed class MockDbParameterCollection : DbParameterCollection
+    {
+        private readonly List<DbParameter> _items = new List<DbParameter>();
+        public override int Count => _items.Count;
+        public override object SyncRoot => ((ICollection)_items).SyncRoot;
+        public override int Add(object value) { _items.Add((DbParameter)value); return _items.Count - 1; }
+        public override void AddRange(Array values) { foreach (DbParameter p in values) _items.Add(p); }
+        public override void Clear() => _items.Clear();
+        public override bool Contains(object value) => _items.Contains((DbParameter)value);
+        public override bool Contains(string value) => IndexOf(value) >= 0;
+        public override void CopyTo(Array array, int index) => ((ICollection)_items).CopyTo(array, index);
+        public override IEnumerator GetEnumerator() => _items.GetEnumerator();
+        public override int IndexOf(object value) => _items.IndexOf((DbParameter)value);
+        public override int IndexOf(string parameterName) => _items.FindIndex(p => string.Equals(p.ParameterName, parameterName, StringComparison.OrdinalIgnoreCase));
+        public override void Insert(int index, object value) => _items.Insert(index, (DbParameter)value);
+        public override void Remove(object value) => _items.Remove((DbParameter)value);
+        public override void RemoveAt(int index) => _items.RemoveAt(index);
+        public override void RemoveAt(string parameterName) { int i = IndexOf(parameterName); if (i >= 0) _items.RemoveAt(i); }
+        protected override DbParameter GetParameter(int index) => _items[index];
+        protected override DbParameter GetParameter(string parameterName) => _items[IndexOf(parameterName)];
+        protected override void SetParameter(int index, DbParameter value) => _items[index] = value;
+        protected override void SetParameter(string parameterName, DbParameter value) { int i = IndexOf(parameterName); if (i >= 0) _items[i] = value; }
+    }
+
+    #endregion
+
+    #region Mock RDLC & Crystal Types for Reflection Testing
+
+    public class MockCrystalReportDocument
+    {
+        public DataTable DataSource { get; private set; }
+        public Dictionary<string, object> Params { get; } = new Dictionary<string, object>();
+        public void SetDataSource(DataTable dt) => DataSource = dt;
+        public void SetParameterValue(string name, object val) => Params[name] = val;
+    }
+
+    public class MockCrystalReportViewer
+    {
+        public object ReportSource { get; set; }
+        public bool Refreshed { get; private set; }
+        public void RefreshReport() => Refreshed = true;
+    }
+
+    public class ReportDataSource
+    {
+        public string Name { get; }
+        public object Value { get; }
+        public ReportDataSource(string name, object value) { Name = name; Value = value; }
+    }
+
+    public class ReportParameter
+    {
+        public string Name { get; }
+        public string Value { get; }
+        public ReportParameter(string name, string value) { Name = name; Value = value; }
+    }
+
+    public class MockLocalReport
+    {
+        public string ReportEmbeddedResource { get; set; }
+        public string ReportPath { get; set; }
+        public List<ReportDataSource> DataSources { get; } = new List<ReportDataSource>();
+        public List<ReportParameter> Parameters { get; } = new List<ReportParameter>();
+
+        public void SetParameters(IEnumerable<ReportParameter> parameters)
+        {
+            Parameters.Clear();
+            Parameters.AddRange(parameters);
+        }
+
+        public byte[] Render(string format) => new byte[] { 1, 2, 3 };
+    }
+
+    public class MockReportViewer
+    {
+        public MockLocalReport LocalReport { get; } = new MockLocalReport();
+        public bool Refreshed { get; private set; }
+        public void RefreshReport() => Refreshed = true;
+    }
+
+    #endregion
 }
 

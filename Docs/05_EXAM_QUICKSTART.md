@@ -1,183 +1,87 @@
-# HƯỚNG DẪN NHANH: HOÀN THÀNH BÀI THI 75 PHÚT TRONG 5 BƯỚC
-> **Bí quyết thi thực hành WinForms & SQL Server đạt điểm tối đa**
+# 05. HỖ TRỢ LÀM NHANH BÀI THI THEO CẤU TRÚC ĐỀ
+
+Tài liệu này gom thẳng **quy trình thực chiến** và **bản đồ ánh xạ đề bài → hàm thư viện** cho dạng đề WinForms 75–90 phút chuẩn (như [Đề mẫu 01](Samples/De01_QLNhanSu/) và các đề quản lý tương tự).
 
 ---
 
-## ⏱️ Phân bổ thời gian trong phòng thi (75 phút)
+## 1. Nhìn nhanh cấu trúc đề thi chuẩn & phân bổ thời gian
 
-- **00 - 10 phút:** Chạy script tạo CSDL trong SQL Server, tạo Project WinForms và kéo thả giao diện.
-- **10 - 15 phút:** Add reference thư viện `ExamHelper.dll` hoặc nhúng source `ExamHelper`.
-- **15 - 35 phút:** Hoàn thành Form 1 (Nạp DB, Đổ dữ liệu dòng chọn, Thêm, Sửa, Xóa).
-- **35 - 55 phút:** Hoàn thành Form 2 (Tìm kiếm đa điều kiện, Thống kê dữ liệu sau lọc).
-- **55 - 70 phút:** Hoàn thành Form Báo cáo hoặc các câu hỏi phụ.
-- **70 - 75 phút:** Kiểm tra lại tất cả trường hợp biên (bảng rỗng, dữ liệu sai, phím tắt Alt).
+| Phần của đề thi | Tỉ trọng thường gặp | Thư viện gánh giúp | Bạn tự làm gì |
+|---|---:|---|---|
+| **Phần I: CSDL & Kết nối** | Điều kiện bắt buộc | `DbHelper` tự đọc `App.config`, tự mở/đóng kết nối, hỗ trợ `SqlServer` / `Sqlite` / `MySql` / `PostgreSql` | Chạy file `.sql` đề cho và dán chuỗi kết nối vào `App.config` |
+| **Phần II: Form 1 — Quản lý chính (CRUD + Validate)** | **~5.0 điểm** | `ComboBoxHelper.Bind`, `GridHelper.Bind`, `FormMapper.AutoLoad/AutoGetValues/AutoClear`, `Validator`, `CrudHelper`, `MessageHelper` | Kéo thả Form Designer, đặt tên control + `Tag`, gán phím tắt `&`, viết SQL `JOIN` + công thức tính cột |
+| **Phần III: Form 2 — Tìm kiếm & Thống kê** | **~2.5 điểm** | `ComboBoxHelper.BindWithAll/BindItems`, `FilterBuilder`, `DbHelper.GetDataTable`, `DataHelper.Count/Sum/Average/Max/Min` | Dựng 2–3 ComboBox lọc + Grid + nhãn kết quả thống kê |
+| **Phần IV: Báo cáo & Xuất Excel / PDF** | **~2.5 điểm** | `ReportHelper.ShowReport` (HTML + kéo thả + `.xlsx` OpenXML) hoặc `BindRdlc` / `ExportRdlc` / `BindCrystalReport` | Chọn `ShowReport` (nhanh) hoặc tự thiết kế file `.rdlc`/`.rpt` (nếu giám khảo chấm cứng công nghệ đó) |
+
+> **Nếu đề có thêm Form quản lý bảng danh mục phụ** (chỉ xem/thêm/sửa/xóa/tìm 1 bảng đơn như `PhongBan`, `ChuyenKhoa`, `NhomHang` — không yêu cầu JOIN hay công thức tính riêng): gọi đúng **1 dòng** `FormGenericManager.Open("PhongBan");` thay vì vẽ cả một Form mới.
 
 ---
 
-## 🚀 5 Bước làm bài thi chuẩn mẫu với ExamHelper
+## 2. Quy trình 4 bước từ con số 0 đến chạy sạch đề thi
 
-### Bước 1: Kết nối CSDL trong sự kiện `Form_Load` (1 phút)
-Mở file code của Form chính (ví dụ `frmQuanLy.cs`), thêm sự kiện `Form_Load`:
+### Bước 1: Tạo DB + Kết nối 1 chỗ (2–3 phút)
+1. Chạy script SQL của đề trên SQL Server (hoặc kiểm tra kết nối DB mà đề cấp).
+2. Add Reference `ExamHelper.dll` (hoặc `ExamHelper.csproj`) vào Project WinForms.
+3. Tạo `App.config` chứa chuỗi kết nối (nếu tạo project trên **.NET 8/10**, nhớ chỉnh `Copy to Output Directory = Copy if newer`):
 
-```csharp
-private void Form1_Load(object sender, EventArgs e)
-{
-    // Cấu hình chuỗi kết nối
-    DbHelper.SetDefaultConnectionString("Server=.;Database=TenCsdlCuaDe;Trusted_Connection=True;");
-
-    // Nạp ComboBox danh mục (Lớp, Phòng ban, Thể loại...)
-    ComboBoxHelper.Bind(cboDanhMuc, DbHelper.GetDataTable("SELECT MaDM, TenDM FROM DanhMuc"), "MaDM", "TenDM");
-
-    LoadData();
-}
-
-private void LoadData()
-{
-    string sql = "SELECT * FROM SinhVien";
-    GridHelper.Bind(dgvSinhVien, DbHelper.GetDataTable(sql),
-        new GridHelper.GridColumn("MaSV", "Mã sinh viên", 100),
-        new GridHelper.GridColumn("HoTen", "Họ và tên", 180),
-        new GridHelper.GridColumn("DiemTB", "Điểm TB", 80, "N1")
-    );
-    GridHelper.SetReadOnly(dgvSinhVien);
-}
+```xml
+<?xml version="1.0" encoding="utf-8" ?>
+<configuration>
+  <connectionStrings>
+    <add name="QLNhanSu"
+         connectionString="Server=(localdb)\MSSQLLocalDB;Database=QLNhanSu;Trusted_Connection=True;"
+         providerName="System.Data.SqlClient" />
+  </connectionStrings>
+</configuration>
 ```
 
----
-
-### Bước 2: Đổ dữ liệu từ DataGridView lên Form (1 phút)
-Click đúp vào `DataGridView` để tạo sự kiện `SelectionChanged`:
-
-```csharp
-private void dgvSinhVien_SelectionChanged(object sender, EventArgs e)
-{
-    DataRowView row = GridHelper.GetSelectedRow(dgvSinhVien);
-    if (row == null) return;
-
-    FormMapper.LoadRow(row,
-        FormMapper.Map(txtMaSV, "MaSV"),
-        FormMapper.Map(txtHoTen, "HoTen"),
-        FormMapper.Map(cboDanhMuc, "MaDM"),
-        FormMapper.Map(dtpNgaySinh, "NgaySinh")
-    );
-    txtMaSV.ReadOnly = true; // Khóa ô mã khi đang xem/sửa
-}
-```
+*(Hoặc gán thẳng 1 dòng trong `Form_Load`: `DbHelper.ConnectionString = "...";`)*
 
 ---
 
-### Bước 3: Nút Thêm mới (2 phút)
-Click đúp vào nút Thêm:
-
-```csharp
-private void btnThem_Click(object sender, EventArgs e)
-{
-    // 1. Kiểm tra tính hợp lệ
-    var val = Validator.ValidateAll(
-        Validator.Required(txtMaSV, "Mã sinh viên"),
-        Validator.Pattern(txtMaSV, "Mã sinh viên", @"^SV\d{3}$", "Mã phải có dạng SV001!"),
-        Validator.Required(txtHoTen, "Họ tên"),
-        Validator.DecimalRange(txtDiem, "Điểm", 0m, 10m)
-    );
-
-    if (!val.IsValid)
-    {
-        MessageHelper.Warning(val.ErrorMessage);
-        FormHelper.FocusControl(val.ErrorControl);
-        return;
-    }
-
-    // 2. Kiểm tra trùng mã
-    string ma = txtMaSV.Text.Trim();
-    if (CrudHelper.Exists("SinhVien", "MaSV", ma))
-    {
-        MessageHelper.DuplicateKey("Mã sinh viên", ma);
-        FormHelper.FocusControl(txtMaSV);
-        return;
-    }
-
-    // 3. Thêm vào CSDL
-    var values = FormMapper.GetValues(
-        FormMapper.Map(txtMaSV, "MaSV"),
-        FormMapper.Map(txtHoTen, "HoTen"),
-        FormMapper.Map(cboDanhMuc, "MaDM")
-    );
-
-    if (CrudHelper.Insert("SinhVien", values) > 0)
-    {
-        MessageHelper.Success("thêm mới");
-        LoadData();
-    }
-}
-```
+### Bước 2: Kéo thả giao diện & Đặt tên theo quy tắc vàng của `FormMapper`
+Để `FormMapper.AutoLoad` và `AutoGetValues` nhận diện tự động mà không cần map tay từng control:
+- Đặt tên control = **tiền tố + tên cột DB**:
+  - TextBox: `txtMaNV`, `txtHoTen`, `txtHeSoLuong`
+  - DateTimePicker: `dtpNgaySinh`, `dtpNgayVaoLam` (nhớ bật `Format = Custom`, `CustomFormat = "dd/MM/yyyy"`)
+  - ComboBox danh mục: `cboPhongBan` (khi `ComboBoxHelper.Bind` xong sẽ tự có `ValueMember = "MaPB"`)
+  - Cụm `RadioButton` (ví dụ Giới tính `bit`): điền thuộc tính **`Tag`** của `rdoNam` là `GioiTinh:1`, của `rdoNu` là `GioiTinh:0`.
+- Đặt chữ `&` vào thuộc tính `Text` của các nút để có phím tắt Alt (`&Thêm`, `&Sửa`, `&Xóa`, `&Làm mới`, `Thống &kê`, `T&hoát`, `&Tìm kiếm`, `&Xuất báo cáo`, `Đó&ng`).
 
 ---
 
-### Bước 4: Nút Sửa & Xóa (2 phút)
-Click đúp vào nút Sửa và nút Xóa:
+### Bước 3: Gặp yêu cầu nào trên Form 1 → Làm đúng cách đó
 
-```csharp
-// SỬA:
-private void btnSua_Click(object sender, EventArgs e)
-{
-    if (!GridHelper.HasSelection(dgvSinhVien)) { MessageHelper.NoSelection(); return; }
-
-    var values = FormMapper.GetValues(
-        FormMapper.Map(txtHoTen, "HoTen"),
-        FormMapper.Map(cboDanhMuc, "MaDM")
-    );
-
-    string ma = txtMaSV.Text.Trim();
-    if (CrudHelper.Update("SinhVien", values, "MaSV", ma) > 0)
-    {
-        MessageHelper.Success("cập nhật");
-        LoadData();
-    }
-}
-
-// XÓA:
-private void btnXoa_Click(object sender, EventArgs e)
-{
-    if (!GridHelper.HasSelection(dgvSinhVien)) { MessageHelper.NoSelection(); return; }
-
-    string ma = txtMaSV.Text.Trim();
-    if (MessageHelper.ConfirmDelete(ma) && CrudHelper.Delete("SinhVien", "MaSV", ma) > 0)
-    {
-        MessageHelper.Success("xóa");
-        LoadData();
-    }
-}
-```
+| Yêu cầu trong đề | Đoạn code áp dụng ngay |
+|---|---|
+| **Nạp ComboBox nhập liệu khi mở Form** | `ComboBoxHelper.Bind(cboPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB");` *(Gọi **trước** `LoadData()`!)* |
+| **Hiển thị Grid có JOIN lấy tên + cột công thức (VD: Lương)** | Viết `SELECT nv.MaNV, nv.HoTen, ..., pb.TenPB, CAST(ROUND(nv.HeSoLuong * 2340000, 0) AS DECIMAL(18,0)) AS Luong, nv.GioiTinh, nv.MaPB FROM NhanVien nv JOIN PhongBan pb ON nv.MaPB = pb.MaPB`<br>Rồi gọi `GridHelper.Bind(dgvDanhSach, sql, new GridHelper.GridColumn(...), ...);`<br>*(Luôn giữ lại cột ẩn `nv.GioiTinh, nv.MaPB` ở cuối câu `SELECT` để click Grid tự nhảy đúng RadioButton & ComboBox.)* |
+| **Chọn 1 dòng Grid → đổ lên ô nhập & khóa ô Mã** | `var row = GridHelper.GetSelectedRow(dgvDanhSach);`<br>`if (row == null) return;`<br>`FormMapper.AutoLoad(this, row);`<br>`txtMaNV.ReadOnly = true;` |
+| **Kiểm tra dữ liệu trước khi Lưu + đưa con trỏ về ô sai** | Lấy schema bảng gốc ở `Form_Load`: `_schema = DbHelper.GetTableSchema("NhanVien");`<br>Khi Lưu gọi: `var val = Validator.FromSchema(this, _schema, Validator.Pattern(txtMaNV, "Mã NV", @"^NV\d{3}$"), Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m), Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi", 18, 120));`<br>`if (!val.IsValid) { MessageHelper.Warning(val.ErrorMessage); FormHelper.FocusControl(val.ErrorControl); return; }` |
+| **Kiểm tra trùng mã ở nút Thêm** | `string ma = txtMaNV.Text.Trim();`<br>`if (CrudHelper.Exists("NhanVien", "MaNV", ma)) { MessageHelper.DuplicateKey("Mã NV", ma); FormHelper.FocusControl(txtMaNV); return; }` |
+| **Thêm / Sửa xuống DB an toàn (`SqlParameter`)** | `var values = FormMapper.AutoGetValues(this, _schema);`<br>Thêm: `CrudHelper.Insert("NhanVien", values)`<br>Sửa: `CrudHelper.Update("NhanVien", values, "MaNV", ma)` *(Tự bỏ qua cột khóa không đổi)* |
+| **Nút Xóa (kiểm tra chọn dòng + hỏi đúng câu đề)** | `if (!GridHelper.HasSelection(dgvDanhSach)) { MessageHelper.NoSelection("nhân viên"); return; }`<br>`string ma = txtMaNV.Text.Trim();`<br>`if (MessageHelper.ConfirmDelete($"nhân viên {ma}") && CrudHelper.Delete("NhanVien", "MaNV", ma) > 0) { MessageHelper.Success("xóa"); LoadData(); }` |
+| **Nút Làm mới / Thống kê / Thoát** | Làm mới: `FormMapper.AutoClear(this); rdoNam.Checked = true; GridHelper.ClearSelection(dgvDanhSach); txtMaNV.ReadOnly = false; txtMaNV.Focus();`<br>Thống kê: `new frmThongKe().ShowDialog(this);`<br>Thoát: `if (MessageHelper.Confirm("Bạn có muốn thoát không?")) Application.Exit();` |
 
 ---
 
-### Bước 5: Tìm kiếm đa điều kiện & Thống kê sau lọc (3 phút)
-Trong Form Tìm kiếm / Thống kê:
+### Bước 4: Gặp yêu cầu Form 2 (Tìm kiếm, Thống kê) & Báo cáo
 
-```csharp
-private void btnTimKiem_Click(object sender, EventArgs e)
-{
-    var (where, parms) = FilterBuilder.New()
-        .SkipIfAllSelected(cboTimDanhMuc, "MaDM")
-        .Contains("HoTen", txtTimTen.Text.Trim())
-        .Build();
-
-    DataTable dt = DbHelper.GetDataTable("SELECT * FROM SinhVien" + where, parms);
-    GridHelper.Bind(dgvKetQua, dt);
-
-    // Cập nhật thống kê tức thì trên dữ liệu đang hiển thị:
-    lblTongSo.Text = $"Tổng số: {DataHelper.Count(dt)}";
-    lblDiemTB.Text = $"Điểm TB: {DataHelper.Average(dt, "DiemTB"):N1}";
-    lblCaoNhat.Text = $"Điểm cao nhất: {DataHelper.Max<decimal>(dt, "DiemTB"):N1}";
-}
-```
+| Yêu cầu trong đề | Đoạn code áp dụng ngay |
+|---|---|
+| **ComboBox có mục `"Tất cả"` chọn sẵn ở Form 2** | `ComboBoxHelper.BindWithAll(cboPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB", "Tất cả");`<br>`ComboBoxHelper.BindItems(cboGioiTinh, "Tất cả", "Nam", "Nữ");` |
+| **Lọc AND kết hợp nhiều điều kiện, rỗng báo không tìm thấy** | `var f = FilterBuilder.ForConnection().SkipIfAllSelected(cboPhongBan, "nv.MaPB");`<br>`if (cboGioiTinh.SelectedIndex == 1) f.Equal("nv.GioiTinh", 1);`<br>`else if (cboGioiTinh.SelectedIndex == 2) f.Equal("nv.GioiTinh", 0);`<br>`_dtKetQua = DbHelper.GetDataTable(sqlBase, f, "pb.TenPB, nv.MaNV");`<br>`GridHelper.Bind(dgvKetQua, _dtKetQua, ...);`<br>`if (!isInitial && _dtKetQua.Rows.Count == 0) MessageHelper.Info("Không tìm thấy dữ liệu phù hợp");` |
+| **Nhóm Thống kê: Đếm / Tổng / Trung bình / Max / Min** | `lblSoNV.Text = $"Số nhân viên: {DataHelper.Count(_dtKetQua)}";`<br>`lblTongLuong.Text = $"Tổng lương: {DataHelper.Sum(_dtKetQua, "Luong"):N0}";`<br>`lblHeSoMax.Text = $"Hệ số lương cao nhất: {DataHelper.Max<double>(_dtKetQua, "HeSoLuong"):0.##}";` |
+| **Báo cáo (tổng quát, nhóm theo cột, xuất `.xlsx` / In)** | `if (_dtKetQua == null \|\| _dtKetQua.Rows.Count == 0) { MessageHelper.Warning("Không có dữ liệu để xuất báo cáo"); return; }`<br>`ReportHelper.ShowReport(_dtKetQua, "BẢNG LƯƠNG NHÂN VIÊN", $"Phòng ban: {cboPhongBan.Text}; Giới tính: {cboGioiTinh.Text}", "TenPB", "Phòng ban: ", cols, "CÔNG TY TNHH AN PHÁT", this);` |
+| **Báo cáo khi đề chấm bắt buộc RDLC / Crystal** | Tự tạo `.rdlc` hoặc `.rpt`, rồi gọi:<br>`ReportHelper.BindRdlc(reportViewer1, "dsNhanVien", ReportHelper.PrepareReportTable(_dtKetQua), parms);`<br>`ReportHelper.ExportRdlc(reportViewer1, "PDF", "BangLuong");` |
 
 ---
 
-## 🎯 Mẫu kiểm tra Checklist trước khi nộp bài
-- [ ] Bật/tắt các nút đúng logic (Đang sửa thì không bấm Thêm, không sửa khóa).
-- [ ] Các nút có phím tắt Alt (`&Thêm`, `&Sửa`, `&Xóa`, `&Tìm kiếm`, `Th&oát`).
-- [ ] Khi nhập sai dữ liệu, con trỏ chuột tự động focus vào ô sai.
-- [ ] Khi xóa có hộp thoại xác nhận Yes/No.
-- [ ] DataGridView hiển thị định dạng chuẩn (`dd/MM/yyyy` cho ngày, `N0` cho tiền tệ).
-- [ ] Bảng rỗng không bị văng lỗi `NullReferenceException`.
+## 3. Checklist kiểm tra 5 phút trước khi nộp bài
+
+- [ ] Đã kiểm tra nút **Thêm**: nhập sai định dạng, trùng khóa, dưới tuổi tối thiểu, sai khoảng số thập phân (cả `,` và `.`) → báo đúng lỗi và trỏ chuột vào đúng ô.
+- [ ] Đã kiểm tra nút **Làm mới**: mở khóa ô mã (`ReadOnly = false`), bỏ chọn dòng trên Grid để chọn lại dòng đầu tiên vẫn nạp bình thường.
+- [ ] Đã kiểm tra nút **Sửa** và **Xóa** khi chưa chọn dòng → không bị văng lỗi `NullReferenceException`.
+- [ ] Đã kiểm tra Form 2 ở trạng thái **0 kết quả lọc** → hiện đúng thông báo và các nhãn thống kê về `0`.
+- [ ] Đã kiểm tra nút **Xuất báo cáo** cả khi Grid rỗng và khi có dữ liệu đã lọc.
+- [ ] Các phím tắt `Alt + ký tự` của mọi nút bấm hoạt động đúng như đề mô tả.

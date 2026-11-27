@@ -10,13 +10,48 @@ namespace ExamHelper.Utilities
     public static class MessageHelper
     {
         /// <summary>
+        /// Khi đặt true, không bật MessageBox lên màn hình (phục vụ kiểm thử tự động). Mặc định: false.
+        /// </summary>
+        public static bool SuppressDialogs { get; set; } = false;
+
+        /// <summary>
+        /// Kết quả mặc định trả về cho Confirm/ConfirmDelete khi SuppressDialogs = true. Mặc định: true (Yes).
+        /// </summary>
+        public static bool AutoConfirmResult { get; set; } = true;
+
+        /// <summary>
+        /// Nội dung thông báo gần nhất được gọi qua MessageHelper.
+        /// </summary>
+        public static string LastMessage { get; private set; }
+
+        /// <summary>
+        /// Tiêu đề thông báo gần nhất được gọi qua MessageHelper.
+        /// </summary>
+        public static string LastTitle { get; private set; }
+
+        private static DialogResult Show(string message, string title, MessageBoxButtons buttons, MessageBoxIcon icon)
+        {
+            LastMessage = message;
+            LastTitle = title;
+
+            if (SuppressDialogs)
+            {
+                if (buttons == MessageBoxButtons.YesNo)
+                    return AutoConfirmResult ? DialogResult.Yes : DialogResult.No;
+                return DialogResult.OK;
+            }
+
+            return MessageBox.Show(message, title, buttons, icon);
+        }
+
+        /// <summary>
         /// Hiển thị hộp thoại thông tin.
         /// </summary>
         /// <param name="message">Nội dung thông báo.</param>
         /// <param name="title">Tiêu đề hộp thoại (mặc định: "Thông báo").</param>
         public static void Info(string message, string title = "Thông báo")
         {
-            MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         /// <summary>
@@ -26,7 +61,7 @@ namespace ExamHelper.Utilities
         /// <param name="title">Tiêu đề hộp thoại (mặc định: "Lỗi").</param>
         public static void Error(string message, string title = "Lỗi")
         {
-            MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         /// <summary>
@@ -36,7 +71,7 @@ namespace ExamHelper.Utilities
         /// <param name="title">Tiêu đề hộp thoại (mặc định: "Cảnh báo").</param>
         public static void Warning(string message, string title = "Cảnh báo")
         {
-            MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         /// <summary>
@@ -50,13 +85,7 @@ namespace ExamHelper.Utilities
                 ? "Bạn có chắc chắn muốn xóa không?"
                 : $"Bạn có chắc chắn muốn xóa {itemName} không?";
 
-            DialogResult result = MessageBox.Show(
-                message,
-                "Xác nhận xóa",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            return result == DialogResult.Yes;
+            return Show(message, "Xác nhận xóa", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
         }
 
         /// <summary>
@@ -67,13 +96,7 @@ namespace ExamHelper.Utilities
         /// <returns>True nếu người dùng chọn Yes, False nếu chọn No.</returns>
         public static bool Confirm(string message, string title = "Xác nhận")
         {
-            DialogResult result = MessageBox.Show(
-                message,
-                title,
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            return result == DialogResult.Yes;
+            return Show(message, title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
         }
 
         /// <summary>
@@ -86,7 +109,7 @@ namespace ExamHelper.Utilities
                 ? "Thành công!"
                 : $"Thao tác {action} thành công!";
 
-            MessageBox.Show(message, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Show(message, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         /// <summary>
@@ -95,11 +118,7 @@ namespace ExamHelper.Utilities
         /// <param name="itemName">Tên đối tượng cần chọn (mặc định: "dòng").</param>
         public static void NoSelection(string itemName = "dòng")
         {
-            MessageBox.Show(
-                $"Vui lòng chọn {itemName} cần thao tác",
-                "Thông báo",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            Show($"Vui lòng chọn {itemName} cần thao tác", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         /// <summary>
@@ -107,11 +126,7 @@ namespace ExamHelper.Utilities
         /// </summary>
         public static void NoData()
         {
-            MessageBox.Show(
-                "Không tìm thấy dữ liệu",
-                "Thông báo",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            Show("Không tìm thấy dữ liệu", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         /// <summary>
@@ -121,11 +136,7 @@ namespace ExamHelper.Utilities
         /// <param name="value">Giá trị bị trùng.</param>
         public static void DuplicateKey(string fieldName, string value)
         {
-            MessageBox.Show(
-                $"{fieldName} '{value}' đã tồn tại",
-                "Lỗi",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            Show($"{fieldName} '{value}' đã tồn tại", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 }

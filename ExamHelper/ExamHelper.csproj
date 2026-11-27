@@ -7,20 +7,36 @@
     <RootNamespace>ExamHelper</RootNamespace>
     <AssemblyName>ExamHelper</AssemblyName>
     
-    <!-- Thông tin Package cho Public Release -->
-    <Version>1.0.0</Version>
+    <!-- Thông tin NuGet / GitHub Package -->
+    <PackageId>ExamHelper</PackageId>
+    <Version>1.1.0</Version>
     <Authors>ExamHelper Community</Authors>
     <Company>ExamHelper</Company>
     <Product>ExamHelper Pro</Product>
-    <Description>Thư viện C# WinForms chuyên dụng tối ưu tốc độ làm bài thi thực hành và các ứng dụng quản lý dữ liệu với SQL Server.</Description>
-    <PackageTags>winforms;sqlserver;crud;validation;helper;ado-net;filter;grid;combobox</PackageTags>
+    <Description>Thư viện C# WinForms (net472, net8.0-windows, net10.0-windows) hỗ trợ đa CSDL (SQL Server, SQLite, MySQL, PostgreSQL, OleDb, Odbc), CRUD, Auto Mapping, Validation theo Schema, FilterBuilder và Báo cáo kéo-thả xuất Excel OpenXML (.xlsx).</Description>
+    <PackageTags>winforms;csharp;dotnet;sqlserver;sqlite;mysql;postgresql;crud;validation;ado-net;filter;report;excel;xlsx</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/junn-noob/CSharp-Helper</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/junn-noob/CSharp-Helper.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>v1.1.0: Hỗ trợ đa CSDL (DbDialect), đọc schema tự động, FormMapper.AutoLoad/AutoGetValues/AutoClear, Validator.FromSchema, FormGenericManager, FormReportViewer kéo-thả xuất OpenXML (.xlsx), bài mẫu Đề 01 và bộ tài liệu làm nhanh bài thi.</PackageReleaseNotes>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);1591</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <Reference Include="System.IO.Compression" />
   </ItemGroup>
 
 </Project>

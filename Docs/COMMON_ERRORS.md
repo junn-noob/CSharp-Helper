@@ -1,109 +1,60 @@
 # CÁC LỖI THƯỜNG GẶP TRONG PHÒNG THI & CÁCH XỬ LÝ NHANH
 
-Tổng hợp những lỗi 90% sinh viên gặp phải khi thi thực hành C# WinForms và cách ExamHelper giúp bạn giải quyết triệt để.
+Tổng hợp các lỗi thực tế dễ gặp khi làm bài thi C# WinForms và cách tránh khi dùng `ExamHelper Pro`.
 
 ---
 
-### Lỗi 1: Lỗi kết nối CSDL (Cannot open database / Login failed)
-* **Nguyên nhân:** Tên máy chủ SQL Server sai hoặc tên Database gõ sai chính tả.
-* **Cách khắc phục:**
-  - Nếu máy phòng thi dùng Windows Authentication:
-    ```csharp
-    DbHelper.SetDefaultConnectionString("Server=.;Database=TenDB;Trusted_Connection=True;");
-    // hoặc
-    DbHelper.SetDefaultConnectionString("Server=localhost;Database=TenDB;Trusted_Connection=True;");
-    // hoặc dùng SQLEXPRESS
-    DbHelper.SetDefaultConnectionString(@"Server=.\SQLEXPRESS;Database=TenDB;Trusted_Connection=True;");
-    ```
-  - Nếu máy phòng thi yêu cầu tài khoản `sa`:
-    ```csharp
-    DbHelper.SetDefaultConnectionString("Server=.;Database=TenDB;User Id=sa;Password=matkhau;");
-    ```
+### Lỗi 1: Kết nối `App.config` chạy được trên `.NET Framework` nhưng báo thiếu trên `.NET 8/10`
+* **Nguyên nhân:** Project WinForms SDK mới (`.NET 8`/`10`) không tự copy file `App.config` ra thư mục `bin\Debug\net10.0-windows\AppName.dll.config`.
+* **Cách khắc phục:** Mở Properties của `App.config` chọn `Copy to Output Directory = Copy if newer` (hoặc thêm `<None Update="App.config"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></None>` trong `.csproj`), hoặc gán thẳng `DbHelper.ConnectionString = "...";`.
 
 ---
 
-### Lỗi 2: DataGridView bị nhân đôi / nạp chồng cột
-* **Nguyên nhân:** Giao diện đã kéo sẵn cột trong Designer nhưng khi code lại gán `DataSource` trực tiếp khiến DataGridView tự sinh thêm cột.
-* **Cách khắc phục:**
-  - `GridHelper.Bind(...)` đã tự động xử lý `AutoGenerateColumns = false` và xóa các cột cũ trước khi cấu hình:
-    ```csharp
-    GridHelper.Bind(dgvNhanVien, dt,
-        new GridHelper.GridColumn("MaNV", "Mã nhân viên", 100),
-        new GridHelper.GridColumn("HoTen", "Họ và tên", 180)
-    );
-    ```
+### Lỗi 2: `FormMapper.AutoGetValues` gửi nhầm cột tính toán xuống lệnh `INSERT`/`UPDATE`
+* **Nguyên nhân:** Lấy `dgvDanhSach.DataSource as DataTable` (chứa cột JOIN như `TenPB`, hoặc cột tính `Luong`) truyền vào `AutoGetValues` khi trên Form lại có ô hiển thị tên trùng cột ảo.
+* **Cách khắc phục:** Lấy schema bảng gốc một lần trong `Form_Load`:
+  ```csharp
+  _schema = DbHelper.GetTableSchema("NhanVien");
+  var values = FormMapper.AutoGetValues(this, _schema);
+  ```
 
 ---
 
-### Lỗi 3: Bấm Sửa nhưng báo "Mã đã tồn tại"
-* **Nguyên nhân:** Khi nhấn nút Lưu, sinh viên kiểm tra trùng mã `SELECT COUNT(*) WHERE MaNV = ...` nhưng quên mất bản ghi này đang tồn tại trong bảng (chính là bản ghi đang sửa).
-* **Cách khắc phục:**
-  - Phân tách rõ ràng giữa Thêm mới và Cập nhật:
-    ```csharp
-    if (_isAdding)
-    {
-        // Chỉ kiểm tra trùng mã khi Thêm mới
-        if (CrudHelper.Exists("NhanVien", "MaNV", maNV))
-        {
-            MessageHelper.DuplicateKey("Mã nhân viên", maNV);
-            return;
-        }
-        CrudHelper.Insert("NhanVien", values);
-    }
-    else
-    {
-        // Khi Sửa: không cho sửa ô Mã (txtMaNV.ReadOnly = true)
-        // và loại bỏ cột khóa chính ra khỏi danh sách cập nhật
-        values.Remove("MaNV");
-        CrudHelper.Update("NhanVien", values, "MaNV", maNV);
-    }
-    ```
+### Lỗi 3: `ComboBox` / `RadioButton` không tự nhảy khi bấm dòng trên `DataGridView`
+* **Nguyên nhân:**
+  1. Câu `SELECT` nạp Grid quên lấy kèm cột khóa ngoại/bit (`nv.MaPB`, `nv.GioiTinh`).
+  2. Gọi `LoadData()` trước khi gọi `ComboBoxHelper.Bind(cboPhongBan, ...)`.
+  3. Quên đặt `Tag = "GioiTinh:1"` / `"GioiTinh:0"` trên hai `RadioButton`.
+* **Cách khắc phục:** Luôn nạp `ComboBox` trước `LoadData()`, `SELECT` đủ các cột khóa gốc ở cuối câu truy vấn và gắn đúng `Tag` cho `RadioButton`.
 
 ---
 
-### Lỗi 4: Lỗi NullReferenceException khi bấm Sửa/Xóa khi bảng chưa có dữ liệu
-* **Nguyên nhân:** Bảng rỗng hoặc người dùng chưa chọn dòng nào trên DataGridView mà đã bấm nút Sửa hoặc Xóa, dẫn tới `dgv.CurrentRow == null`.
-* **Cách khắc phục:**
-  - Luôn kiểm tra bằng `GridHelper.HasSelection(dgv)` ở dòng đầu tiên của sự kiện:
-    ```csharp
-    if (!GridHelper.HasSelection(dgvNhanVien))
-    {
-        MessageHelper.NoSelection("nhân viên");
-        return;
-    }
-    ```
+### Lỗi 4: Bấm `Làm mới` xong bấm lại dòng đầu tiên trên Grid không ăn
+* **Nguyên nhân:** `DataGridView.ClearSelection()` đôi khi giữ nguyên `CurrentCell` nên click lại dòng 0 không phát sự kiện `SelectionChanged`.
+* **Cách khắc phục:** Dùng `GridHelper.ClearSelection(dgvDanhSach);` (đã xử lý xóa cả `CurrentCell = null`).
 
 ---
 
-### Lỗi 5: Lỗi tính sai tuổi (Tính theo năm trừ năm)
-* **Nguyên nhân:** Viết `DateTime.Now.Year - dtpNgaySinh.Value.Year`. Nếu bạn sinh tháng 12/2000, vào tháng 2/2018 bạn mới chỉ 17 tuổi, nhưng phép trừ ra 18 tuổi. Giám khảo chấm thi kiểm tra dữ liệu biên sẽ trừ điểm.
+### Lỗi 5: Bấm `Sửa` báo `"Mã đã tồn tại"` hoặc văng `NullReferenceException` khi chưa chọn dòng
 * **Cách khắc phục:**
-  - Sử dụng hàm chuẩn của ExamHelper:
-    ```csharp
-    // Tự động kiểm tra chính xác ngày sinh đã qua trong năm hay chưa
-    int age = Validator.CalculateAge(dtpNgaySinh.Value, dtpNgayVaoLam.Value);
-    
-    // Hoặc kiểm tra tự động qua bộ rule:
-    Validator.AgeRangeAtDate(dtpNgaySinh, "Tuổi nhân viên", 18, 60);
-    ```
+  - Đầu `btnSua_Click` / `btnXoa_Click` luôn đặt: `if (!GridHelper.HasSelection(dgv)) { MessageHelper.NoSelection(...); return; }`
+  - Chỉ gọi `CrudHelper.Exists(...)` trong `btnThem_Click`, tuyệt đối không gọi trong `btnSua_Click` (hoặc dùng `ExistsExcept` nếu kiểm tra trùng cột unique phụ).
 
 ---
 
-### Lỗi 6: Lỗi ComboBox `SelectedValue` bị null hoặc ép kiểu thất bại
-* **Nguyên nhân:** Khi ComboBox đang nạp `DataSource`, sự kiện `SelectedIndexChanged` được kích hoạt khi `SelectedValue` vẫn là kiểu `DataRowView`.
+### Lỗi 6: Tính sai tuổi biên (chưa tới ngày sinh nhật) hoặc lỗi nhập dấu phẩy `,` ở số thập phân
+* **Nguyên nhân:** Trừ năm thô (`2024 - 2000`) hoặc dùng `double.Parse` mặc định không nhận `"2,34"`.
 * **Cách khắc phục:**
-  - Dùng `ComboBoxHelper.GetSelectedValue<string>(cbo)` hoặc `ComboBoxHelper.GetSelectedValue<int>(cbo)`. Hàm này đã tích hợp sẵn try-catch và kiểm tra null an toàn.
+  - Dùng `Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, ...)` hoặc `Validator.CalculateAge(birth, refDate)`.
+  - Dùng `Validator.DecimalRange(...)` và `FormMapper.AutoGetValues(this, _schema)` (hoặc `MapDouble`/`DataHelper.TryParseDecimal`) để hỗ trợ cả `"2,34"` và `"2.34"`.
 
 ---
 
-### Lỗi 7: SQL Injection hoặc lỗi dấu nháy đơn khi tên có ký tự đặc biệt
-* **Nguyên nhân:** Viết SQL nối chuỗi: `"SELECT * FROM NhanVien WHERE HoTen LIKE '%" + txtTen.Text + "%'"`. Nếu người nhập `O'Reilly`, câu SQL bị vỡ cú pháp.
-* **Cách khắc phục:**
-  - Dùng `FilterBuilder`:
-    ```csharp
-    var (where, parms) = FilterBuilder.New()
-        .Contains("HoTen", txtTen.Text)
-        .Build();
-    var dt = DbHelper.GetDataTable("SELECT * FROM NhanVien" + where, parms);
-    ```
-    Toàn bộ giá trị đều được truyền qua `SqlParameter`, hoàn toàn an toàn và không bao giờ bị lỗi nháy đơn.
+### Lỗi 7: Lỗi SQL âm thầm trả bảng rỗng nhưng không biết vì sao
+* **Nguyên nhân:** Mặc định `DbHelper.ThrowOnError = false` để app không bị sập giữa chừng; nếu tắt `ShowErrorDialog`, bảng rỗng do không có dòng rất dễ nhầm với lỗi sai SQL.
+* **Cách khắc phục:** Kiểm tra `if (DbHelper.HasError) { MessageBox.Show(DbHelper.LastError.Message); }` hoặc gọi `DbHelper.TestConnection("default", showError: true, timeoutSeconds: 3)`.
+
+---
+
+### Lỗi 8: Đề bài yêu cầu RDLC / Crystal Report nhưng chỉ dùng `ShowReport`
+* **Lưu ý chấm thi:** `ReportHelper.ShowReport(...)` dùng `FormReportViewer` (HTML trên `WebBrowser` + xuất OpenXML `.xlsx`), **không phải** file `.rdlc` hay `.rpt`. Nếu đề hoặc giám khảo bắt buộc kiểm tra file `.rdlc`/`.rpt`, bạn phải tự thiết kế file đó trong Visual Studio rồi nạp dữ liệu bằng `ReportHelper.BindRdlc`/`ExportRdlc` hoặc `BindCrystalReport`/`ExportCrystalReport`.

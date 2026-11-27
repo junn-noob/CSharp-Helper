@@ -33,8 +33,17 @@ namespace ExamHelper.Utilities
         {
             if (table == null)
                 return 0;
+            if (string.IsNullOrWhiteSpace(filter))
+                return table.Rows.Count;
 
-            return table.Select(filter).Length;
+            try
+            {
+                return table.Select(filter).Length;
+            }
+            catch
+            {
+                return 0;
+            }
         }
 
         #endregion
@@ -245,6 +254,20 @@ namespace ExamHelper.Utilities
                 {
                     // Nhiều dấu phẩy: "1,000,000" -> phân cách hàng nghìn
                     clean = clean.Replace(",", "");
+                }
+            }
+            else if (lastDot >= 0)
+            {
+                int dotCount = 0;
+                for (int i = 0; i < clean.Length; i++)
+                {
+                    if (clean[i] == '.') dotCount++;
+                }
+
+                if (dotCount > 1)
+                {
+                    // Nhiều dấu chấm không có dấu phẩy: "1.500.000" -> phân cách hàng nghìn (VN/EU)
+                    clean = clean.Replace(".", "");
                 }
             }
 

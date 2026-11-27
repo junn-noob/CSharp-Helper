@@ -10,7 +10,8 @@ Nếu bạn mới học WinForms và cảm thấy bối rối trước hàng đ�
 
 | Khi bạn muốn... | Dùng Lớp / Hàm này | Nhảy đến mục |
 |---|---|:---:|
-| Kết nối SQL Server hoặc chạy câu lệnh `SELECT` | `DbHelper` | [Mục 1](#1-dbhelper---kết-nối--truy-vấn-sql-server) |
+| Kết nối đa CSDL (SQL Server, SQLite, MySQL, PostgreSQL, OleDb, Odbc) & `SELECT` | `DbHelper` | [Mục 1](#1-dbhelper---kết-nối--truy-vấn-sql-server) |
+| Mở form CRUD + tìm kiếm + báo cáo **tự sinh từ bất kỳ bảng CSDL nào** | `FormGenericManager.Open` | [Mục 1.3](#13-tự-đọc-schema-và-mở-form-quản-lý-bất-kỳ-bảng-nào) |
 | Đổ dữ liệu vào ComboBox (Phòng ban, Chuyên khoa, Lớp...) | `ComboBoxHelper.Bind` | [Mục 2](#2-comboboxhelper---nạp-combobox-cực-dễ) |
 | Đổ danh mục có thêm dòng **"-- Tất cả --"** để tìm kiếm | `ComboBoxHelper.BindWithAll` | [Mục 2](#2-comboboxhelper---nạp-combobox-cực-dễ) |
 | Hiển thị dữ liệu lên DataGridView kèm định dạng tiền `N0`, ngày `dd/MM/yyyy` | `GridHelper.Bind` | [Mục 3](#3-gridhelper---nạp-bảng-datagridview-đẹp-mắt) |
@@ -31,36 +32,52 @@ Nếu bạn mới học WinForms và cảm thấy bối rối trước hàng đ�
 
 > **Nhiệm vụ:** Giúp bạn kết nối CSDL và đọc dữ liệu mà không sợ lỗi văng ứng dụng hay SQL Injection.
 
-### 1.1 Khai báo kết nối trong `Form_Load` (Bắt buộc làm đầu tiên!)
+### 1.1 Khai báo kết nối (Chỉ cần gán 1 lần — tự mở & đóng sau mỗi truy vấn)
 ```csharp
 private void Form1_Load(object sender, EventArgs e)
 {
-    // Cú pháp kết nối máy cục bộ (Dấu chấm '.' đại diện cho máy của bạn)
-    DbHelper.SetDefaultConnectionString("Server=.;Database=Tên_Database_Của_Đề;Trusted_Connection=True;");
-    
-    // Nếu máy phòng thi dùng SQL Express có dấu gạch chéo:
-    // DbHelper.SetDefaultConnectionString(@"Server=.\SQLEXPRESS;Database=Tên_DB;Trusted_Connection=True;");
+    // Cách A: Gán thẳng thuộc tính ConnectionString (đổi lúc nào tự kết nối DB đó ngay)
+    DbHelper.ConnectionString = @"Server=(localdb)\MSSQLLocalDB;Database=QLNhanSu;Trusted_Connection=True;";
+
+    // Cách B: Đặt sẵn trong thẻ <connectionStrings> của App.config -> tự nhận, không cần viết code kết nối!
+    // Hoặc chọn đích danh tên cấu hình: DbHelper.SetConnectionStringFromConfig("QLNhanSu");
 }
 ```
 
-### 1.2 Lấy dữ liệu ra bảng (`GetDataTable`)
-Dùng khi bạn muốn chạy câu lệnh `SELECT` để lấy dữ liệu nạp lên Grid hoặc ComboBox.
+### 1.2 Lấy dữ liệu chỉ bằng câu query
+Mọi hàm đều tự mở kết nối trước khi chạy và tự đóng ngay khi xong:
 
 ```csharp
-// Trường hợp 1: SELECT toàn bộ (không có điều kiện WHERE)
+// Lấy nguyên bảng:
 DataTable dt = DbHelper.GetDataTable("SELECT * FROM NhanVien");
 
-// Trường hợp 2: SELECT có điều kiện tham số an toàn (Dùng DbHelper.Param)
-string sql = "SELECT * FROM NhanVien WHERE MaPB = @mapb AND Luong >= @luong";
-DataTable dt = DbHelper.GetDataTable(sql,
-    DbHelper.Param("@mapb", "PB01"),
-    DbHelper.Param("@luong", 5000000m)
-);
+// Lấy kèm tham số an toàn (bỏ @ cũng được):
+DataTable dt2 = DbHelper.GetDataTable("SELECT * FROM NhanVien WHERE MaPB = @mapb",
+    DbHelper.Param("mapb", "PB01"));
+
+// Lấy nhanh 1 dòng đầu tiên:
+DataRow row = DbHelper.GetDataRow("SELECT * FROM NhanVien WHERE MaNV = @ma", DbHelper.Param("ma", "NV001"));
+
+// Hoặc truyền thẳng chuỗi kết nối khác riêng cho 1 câu query:
+DataTable dtOther = DbHelper.GetDataTable("SELECT * FROM SanPham", "Server=.;Database=QLBanHang;Trusted_Connection=True;");
+
+// Kết nối hệ CSDL khác (khi dự án có sẵn driver NuGet tương ứng):
+// DbHelper.SetDefaultConnectionString("Data Source=dulieu.db", Microsoft.Data.Sqlite.SqliteFactory.Instance, DbDialect.Sqlite);
+// DbHelper.SetDefaultConnectionString("Server=localhost;Database=app;Uid=root;Pwd=123;", MySqlConnector.MySqlConnectorFactory.Instance, DbDialect.MySql);
 ```
 
-> [!TIP]
-> **DbHelper.Param có gì đặc biệt?**  
-> Khi giá trị bị `null`, nó tự đổi thành `DBNull.Value` của SQL Server. Bạn không bao giờ bị lỗi `ArgumentNullException`.
+### 1.3 Tự đọc schema và mở Form quản lý bất kỳ bảng nào
+```csharp
+// Đọc danh sách bảng & cấu trúc cột từ bất kỳ CSDL nào đang kết nối:
+List<string> tables = DbHelper.GetTableNames();
+DataTable schema = DbHelper.GetTableSchema("SanPham");
+
+// Kiểm tra hợp lệ tự động từ schema (NOT NULL, MaxLength, số nguyên/thực):
+var v = Validator.FromSchema(this, schema);
+
+// Mở thẳng Form CRUD + tìm kiếm + xuất báo cáo tự sinh không cần viết code riêng từng bảng:
+FormGenericManager.Open(); // hoặc FormGenericManager.Open("SanPham");
+```
 
 ---
 
@@ -70,14 +87,11 @@ DataTable dt = DbHelper.GetDataTable(sql,
 
 ### 2.1 Dùng cho Form nhập liệu (Form 1)
 ```csharp
-// Đọc bảng danh mục từ CSDL
-DataTable dtPB = DbHelper.GetDataTable("SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB");
+// Cách nhanh nhất: truyền thẳng câu SQL (tự lấy cột 1 làm Value, cột 2 làm Display):
+ComboBoxHelper.Bind(cboPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB");
 
-// Nạp vào ComboBox:
-// Tham số 1: Control ComboBox
-// Tham số 2: DataTable chứa dữ liệu
-// Tham số 3: Tên cột LƯU TRỮ (khóa ngoại ẩn - ValueMember)
-// Tham số 4: Tên cột HIỂN THỊ (chữ nhìn thấy - DisplayMember)
+// Hoặc tự truyền DataTable và chỉ định tên cột rõ ràng:
+DataTable dtPB = DbHelper.GetDataTable("SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB");
 ComboBoxHelper.Bind(cboPhongBan, dtPB, "MaPB", "TenPB");
 ```
 
@@ -85,10 +99,11 @@ ComboBoxHelper.Bind(cboPhongBan, dtPB, "MaPB", "TenPB");
 Cần có thêm dòng `-- Tất cả --` ở đầu danh sách để khi người dùng chọn thì tìm tất cả.
 
 ```csharp
-DataTable dtPB = DbHelper.GetDataTable("SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB");
+// Truyền thẳng câu SQL + tự thêm dòng "Tất cả" ở đầu:
+ComboBoxHelper.BindWithAll(cboTimPhongBan, "SELECT MaPB, TenPB FROM PhongBan ORDER BY TenPB", "Tất cả");
 
-// Tự động chèn thêm dòng "-- Tất cả --" ở dòng đầu tiên (Index = 0)
-ComboBoxHelper.BindWithAll(cboTimPhongBan, dtPB, "MaPB", "TenPB", "-- Tất cả phòng ban --");
+// Nạp danh sách tĩnh (Giới tính / Trạng thái) sạch sẽ không trùng lặp:
+ComboBoxHelper.BindItems(cboGioiTinh, "Tất cả", "Nam", "Nữ");
 ```
 
 ### 2.3 Cách lấy giá trị đang chọn trong ComboBox
@@ -116,18 +131,21 @@ if (ComboBoxHelper.IsAllSelected(cboTimPhongBan))
 ```csharp
 private void LoadData()
 {
-    // 1. Viết câu SQL (nhớ SELECT cả cột mã nếu muốn đổ lên ComboBox)
+    // Cách siêu gọn (1 dòng): chỉ cần gõ câu query là lưới trên Form tự có dữ liệu!
+    GridHelper.Bind(dgvNhanVien, "SELECT MaNV AS [Mã NV], HoTen AS [Họ tên], Luong AS [Lương] FROM NhanVien");
+    GridHelper.SetReadOnly(dgvNhanVien);
+}
+
+// Hoặc tùy chỉnh từng cột chi tiết với GridColumn:
+private void LoadDataChiTiet()
+{
     string sql = @"SELECT nv.MaNV, nv.HoTen, 
                           CASE nv.GioiTinh WHEN 1 THEN N'Nam' ELSE N'Nữ' END AS GioiTinhText,
                           nv.NgaySinh, pb.TenPB, nv.Luong, nv.MaPB
                    FROM NhanVien nv 
                    JOIN PhongBan pb ON nv.MaPB = pb.MaPB";
 
-    DataTable dt = DbHelper.GetDataTable(sql);
-
-    // 2. Nạp lên Grid kèm định dạng từng cột:
-    // new GridColumn("Tên_Cột_Trong_SQL", "Tiêu_Đề_Hiển_Thị", Độ_Rộng, "Định_Dạng")
-    GridHelper.Bind(dgvNhanVien, dt,
+    GridHelper.Bind(dgvNhanVien, sql,
         new GridHelper.GridColumn("MaNV", "Mã nhân viên", 100),
         new GridHelper.GridColumn("HoTen", "Họ và tên", 180),
         new GridHelper.GridColumn("GioiTinhText", "Giới tính", 80),
@@ -135,8 +153,6 @@ private void LoadData()
         new GridHelper.GridColumn("TenPB", "Phòng ban", 140),
         new GridHelper.GridColumn("Luong", "Mức lương", 120, "N0")            // N0: Format tiền 15.000.000
     );
-
-    // 3. Khóa không cho người dùng sửa trực tiếp trên ô, chọn cả dòng
     GridHelper.SetReadOnly(dgvNhanVien);
 }
 ```
@@ -153,73 +169,42 @@ private void LoadData()
 
 > **Nhiệm vụ:** Đây là "vũ khí tối thượng" giúp bạn không phải viết 20 dòng gán `txtTen.Text = row["Ten"].ToString()` thủ công!
 
-### 4.1 Chiều 1: Bấm vào dòng DataGridView ➔ Đổ lên Form (`LoadRow`)
-Tạo sự kiện `SelectionChanged` của `DataGridView` (click đúp vào DataGridView trong Designer):
-
+### 4.1 Đổ tự động lên Form theo tên Control (`AutoLoad` - 1 dòng) hoặc `LoadRow`
 ```csharp
 private void dgvNhanVien_SelectionChanged(object sender, EventArgs e)
 {
-    // 1. Lấy dòng đang chọn
     DataRowView row = GridHelper.GetSelectedRow(dgvNhanVien);
     if (row == null) return;
 
-    // 2. Đổ tự động lên các control trong 1 lệnh duy nhất!
-    FormMapper.LoadRow(row,
-        FormMapper.Map(txtMaNV, "MaNV"),
-        FormMapper.Map(txtHoTen, "HoTen"),
-        FormMapper.Map(dtpNgaySinh, "NgaySinh"),
-        FormMapper.Map(cboPhongBan, "MaPB"), // Tự động chọn đúng mục trong ComboBox!
-        FormMapper.Map(txtLuong, "Luong")
-    );
+    // Cách A (Tự động): tự khớp txtMaNV -> MaNV, cboPhongBan (ValueMember) -> MaPB, rdoNam (Tag="GioiTinh:1") -> GioiTinh
+    FormMapper.AutoLoad(this, row);
 
-    // Xử lý RadioButton giới tính (nếu có):
-    if (row["GioiTinh"] != DBNull.Value)
-    {
-        rdoNam.Checked = Convert.ToBoolean(row["GioiTinh"]);
-        rdoNu.Checked = !rdoNam.Checked;
-    }
+    // Cách B (Chỉ định tay từng cặp nếu tên control khác hẳn tên cột DB):
+    // FormMapper.LoadRow(row, FormMapper.Map(txtMaNV, "MaNV"), FormMapper.Map(rdoNam, rdoNu, "GioiTinh"), ...);
 
-    // Khóa ô mã khi đang xem/sửa dòng cũ
     txtMaNV.ReadOnly = true;
 }
 ```
 
-> [!WARNING]
-> **Bẫy Newbie:** Để `cboPhongBan` nhảy đúng mục, trong câu `SELECT` nạp Grid bạn **BẮT BUỘC PHẢI CÓ CỘT `MaPB`**. Nếu chỉ SELECT `TenPB` thì `FormMapper` không có dữ liệu để map vào ComboBox!
+> [!TIP]
+> Có thể nạp thẳng từ câu query: `FormMapper.AutoLoadSql(this, "SELECT * FROM NhanVien WHERE MaNV = @ma", DbHelper.Param("ma", "NV001"));`.
 
-### 4.2 Chiều 2: Đọc dữ liệu từ Form ➔ Chuẩn bị lưu xuống CSDL (`GetValues`)
-Dùng khi Thêm mới hoặc Sửa:
-
+### 4.2 Đọc dữ liệu từ Form ➔ Chuẩn bị lưu xuống CSDL (`AutoGetValues` / `GetValues`)
 ```csharp
-private Dictionary<string, object> LayDuLieuTuForm()
-{
-    var values = FormMapper.GetValues(
-        FormMapper.Map(txtMaNV, "MaNV"),
-        FormMapper.Map(txtHoTen, "HoTen"),
-        FormMapper.Map(dtpNgaySinh, "NgaySinh"),
-        FormMapper.Map(cboPhongBan, "MaPB"),
-        FormMapper.Map(txtLuong, "Luong")
-    );
+// Cách A (Tự động): truyền DataTable nguồn làm schema để tự ép kiểu double/decimal/int/bool chuẩn SQL Server
+var values = FormMapper.AutoGetValues(this, dgvNhanVien.DataSource as DataTable);
 
-    // Gán thêm RadioButton giới tính:
-    values["GioiTinh"] = rdoNam.Checked ? 1 : 0;
-
-    return values;
-}
+// Cách B (Chỉ định tay):
+// var values = FormMapper.GetValues(FormMapper.Map(txtMaNV, "MaNV"), FormMapper.MapDouble(txtHeSoLuong, "HeSoLuong"), ...);
 ```
 
-### 4.3 Xóa trắng Form (`ClearControls`)
-Dùng cho nút **Làm mới**:
+### 4.3 Xóa trắng Form (`AutoClear` / `ClearControls`) & Bỏ chọn Grid (`ClearSelection`)
 ```csharp
 private void btnLamMoi_Click(object sender, EventArgs e)
 {
-    // Tự động xóa trắng TextBox, ComboBox về đầu, DateTimePicker về hôm nay
-    FormMapper.ClearControls(txtMaNV, txtHoTen, txtLuong);
+    FormMapper.AutoClear(this);
     rdoNam.Checked = true;
-    dtpNgaySinh.Value = DateTime.Today;
-    if (cboPhongBan.Items.Count > 0) cboPhongBan.SelectedIndex = 0;
-
-    // Mở khóa ô mã để nhập mới
+    GridHelper.ClearSelection(dgvNhanVien);
     txtMaNV.ReadOnly = false;
     txtMaNV.Focus();
 }
@@ -240,20 +225,21 @@ private void btnLamMoi_Click(object sender, EventArgs e)
 | **Khoảng số thực / Tiền** | `Validator.DecimalRange(txtLuong, "Lương", 100000m, 50000000m)` | Lương từ 100k đến 50tr |
 | **Khoảng số nguyên** | `Validator.IntRange(txtSoLuong, "Số lượng", 1, 100)` | Số từ 1 đến 100 |
 | **Độ tuổi hôm nay** | `Validator.AgeRange(dtpNgaySinh, "Tuổi", 18, 65)` | Từ 18 đến 65 tuổi |
-| **Độ tuổi tại ngày vào làm** | `Validator.AgeRangeAtDate(dtpNgaySinh, "Tuổi", 24, 100)` | **Đặc sản đề thi!** |
+| **Độ tuổi tại ngày vào làm** | `Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi", 18, 120)` | **Đặc sản đề thi!** Truyền thẳng `dtpNgayVaoLam` |
+| **So sánh 2 ngày** | `Validator.DateBeforeOrEqual(dtpNgaySinh, dtpNgayVaoLam, "Ngày sinh")` | Ngày 1 `<=` Ngày 2 |
+| **Không vượt quá hôm nay** | `Validator.NotFutureDate(dtpNgayNhap, "Ngày nhập")` | Kiểm tra `<= DateTime.Today` |
 
 ### 5.2 Cách gọi trong nút Thêm / Sửa:
 ```csharp
 private ValidationResult KiemTraHopLe()
 {
     return Validator.ValidateAll(
-        dtpNgayVaoLam.Value, // Ngày mốc tính tuổi (nếu đề thi yêu cầu)
         Validator.Required(txtMaNV, "Mã nhân viên"),
         Validator.Pattern(txtMaNV, "Mã nhân viên", @"^NV\d{3}$", "Mã nhân viên phải bắt đầu bằng NV và 3 chữ số!"),
         Validator.Required(txtHoTen, "Họ và tên"),
         Validator.Selected(cboPhongBan, "Phòng ban"),
-        Validator.DecimalRange(txtLuong, "Mức lương", 100000m, 50000000m),
-        Validator.AgeRangeAtDate(dtpNgaySinh, "Tuổi nhân viên", 18, 65, "Nhân viên phải từ đủ 18 tuổi tính đến ngày vào làm!")
+        Validator.DecimalRange(txtHeSoLuong, "Hệ số lương", 2.34m, 8.0m),
+        Validator.AgeRangeAtDate(dtpNgaySinh, dtpNgayVaoLam, "Tuổi nhân viên", 18, 120, "Nhân viên phải đủ 18 tuổi tính đến ngày vào làm!")
     );
 }
 
@@ -452,19 +438,21 @@ private void CapNhatThongKe(DataTable dt)
 |---|---|---|
 | Báo thành công | `MessageHelper.Success("thêm mới");` | `"Thao tác thêm mới thành công!"` (Icon Info) |
 | Cảnh báo dữ liệu sai | `MessageHelper.Warning("Vui lòng nhập họ tên!");` | `"Vui lòng nhập họ tên!"` (Icon Warning) |
-| Báo trùng mã | `MessageHelper.DuplicateKey("Mã SV", "SV001");` | `"Mã SV 'SV001' đã tồn tại trong hệ thống!"` |
-| Quên chọn dòng | `MessageHelper.NoSelection("dòng cần xóa");` | `"Vui lòng chọn dòng cần xóa cần thao tác!"` |
+| Báo trùng mã | `MessageHelper.DuplicateKey("Mã SV", "SV001");` | `"Mã SV 'SV001' đã tồn tại"` |
+| Quên chọn dòng | `MessageHelper.NoSelection("dòng cần sửa");` | `"Vui lòng chọn dòng cần sửa cần thao tác"` |
 | Hỏi xóa Yes/No | `MessageHelper.ConfirmDelete("bác sĩ A");` | `"Bạn có chắc chắn muốn xóa bác sĩ A không?"` (2 nút Yes/No) |
 | Hỏi thoát Yes/No | `MessageHelper.Confirm("Bạn có muốn thoát?", "Xác nhận");` | Trả về `true` nếu bấm Yes |
 
 ---
 
-## 10. `ReportHelper` - Form Báo Cáo dùng chung (Chuẩn In & Excel)
+## 10. `ReportHelper` - Form Báo Cáo dùng chung & Hỗ trợ RDLC (In, PDF, Excel)
 
-> **Nhiệm vụ:** Hoàn thành câu hỏi Báo cáo (2.5 điểm) trong **30 giây**! Bạn không cần kéo thả Form mới hay viết hàng chục dòng nối chuỗi HTML. Chỉ cần gọi `ReportHelper.ShowReport` là có ngay Form xem trước chuyên nghiệp, nút **In ấn** và nút **Xuất Excel (.xls)**.
+> **Nhiệm vụ:** Hoàn thành câu hỏi Báo cáo (2.5 điểm) nhanh nhất có thể! Bạn có 2 lựa chọn tùy theo yêu cầu giám khảo:
+> - **Lựa chọn A (Siêu tốc - Tự gom bảng & Kéo thả trực tiếp):** Gọi `ReportHelper.ShowReport(_dtKetQua)` hoặc `ReportHelper.ShowReport(dgvKetQua, "TIÊU ĐỀ", owner: this)` để tự gom **toàn bộ trường dữ liệu** vào 1 bảng chuẩn A4; người dùng có thể **kéo-thả ẩn/hiện/đổi thứ tự/gom nhóm cột, sửa tiêu đề, đổi tên cột** ngay trên Form xem trước rồi nhấn **In / Lưu PDF**, **Xem trước** hoặc **Xuất Excel**.
+> - **Lựa chọn B (Nếu đề bắt buộc dùng RDLC `ReportViewer`):** Gọi `ReportHelper.PrepareReportTable(...)`, `ReportHelper.BindRdlc(...)` và `ReportHelper.ExportRdlc(...)` để nạp DataSet, truyền Parameter và xuất PDF/Excel trực tiếp qua `SaveFileDialog`.
 
-### 10.1 Cách 1: Gọi siêu tốc 1 dòng code (Tự động tất cả)
-Nếu bạn cần làm nhanh trong phòng thi:
+### 10.1 Cách 1: Gọi siêu tốc 1 dòng code (Tự gom toàn bộ cột + Kéo thả chỉnh trực tiếp)
+Nếu không muốn khai báo cứng cấu trúc cột trong code, chỉ cần truyền thẳng `DataTable` hoặc `DataGridView`:
 ```csharp
 private void btnXuatBaoCao_Click(object sender, EventArgs e)
 {
@@ -474,44 +462,92 @@ private void btnXuatBaoCao_Click(object sender, EventArgs e)
         return;
     }
 
-    // Tự động gom nhóm theo Chuyên khoa và tính tổng cột Đơn giá khám:
+    // Cách gọn nhất: truyền DataTable, DataGridView hoặc câu SQL trực tiếp -> tự gom cột & kéo-thả chỉnh sửa:
+    ReportHelper.ShowReport(_dtKetQua, "BÁO CÁO THỐNG KÊ", owner: this);
+    // ReportHelper.ShowReport(dgvKetQua, "BÁO CÁO THỐNG KÊ", owner: this);
+    // ReportHelper.ShowReport("SELECT * FROM NhanVien", "DANH SÁCH NHÂN VIÊN", owner: this);
+
+    // Hoặc chỉ định sẵn cột gom nhóm + cột tính tổng:
+    // ReportHelper.ShowReport(_dtKetQua, "BẢNG LƯƠNG", "TenPB", "Luong", "Tất cả", this, "CÔNG TY ABC", "Phòng ban: ");
+}
+```
+
+### 10.2 Cách 2: Tùy chỉnh danh sách cột chi tiết (Khớp mẫu Đề 01 từng cột)
+Khi đề thi yêu cầu hiển thị chính xác các cột chỉ định kèm căn lề, định dạng và tên công ty:
+
+```csharp
+private void btnXuatBaoCao_Click(object sender, EventArgs e)
+{
+    if (_dtKetQua == null || _dtKetQua.Rows.Count == 0)
+    {
+        MessageHelper.Warning("Không có dữ liệu để xuất báo cáo");
+        return;
+    }
+
     ReportHelper.ShowReport(
         dataTable: _dtKetQua,
-        reportTitle: "BÁO CÁO DANH SÁCH BÁC SĨ THEO CHUYÊN KHOA",
-        groupByColumn: "TenCK",     // Cột gom nhóm (hoặc null nếu không gom)
-        sumColumn: "DonGiaKham",    // Cột cần tính tổng cộng
-        filterCondition: $"Chuyên khoa: {cboChuyenKhoa.Text}; Giới tính: {cboGioiTinh.Text}"
+        reportTitle: "BẢNG LƯƠNG NHÂN VIÊN",
+        filterCondition: $"Phòng ban: {cboPhongBan.Text}; Giới tính: {cboGioiTinh.Text}",
+        groupByColumn: "TenPB",
+        groupPrefix: "Phòng ban: ",
+        columns: new[] {
+            new ReportColumn("MaNV", "Mã NV", HorizontalAlignment.Center),
+            new ReportColumn("HoTen", "Họ tên"),
+            new ReportColumn("NgaySinh", "Ngày sinh", "dd/MM/yyyy", HorizontalAlignment.Center),
+            new ReportColumn("HeSoLuong", "Hệ số lương", "0.##", HorizontalAlignment.Right),
+            new ReportColumn("Luong", "Lương", "N0", HorizontalAlignment.Right, ReportSummaryMode.Sum)
+            // Hỗ trợ ReportSummaryMode: None, Sum, Average, Count, Max, Min; tùy chọn landscape: true, fontSizePt: 14
+        },
+        companyName: "CÔNG TY TNHH AN PHÁT"
     );
 }
 ```
 
-### 10.2 Cách 2: Tùy chỉnh danh sách cột chi tiết (Chuẩn mẫu 10 điểm)
-Khi đề thi yêu cầu hiển thị chính xác các cột chỉ định kèm căn lề và định dạng:
+### 10.3 Cách 3: Hỗ trợ RDLC `ReportViewer` (Nạp bảng + Parameter + Xuất PDF/Excel)
+Khi đề thi bắt buộc dùng control `ReportViewer` (`.rdlc`) và `LocalReport.Render`:
 
 ```csharp
-private void btnXuatBaoCao_Click(object sender, EventArgs e)
+// Trong Form chứa reportViewer1:
+private void frmBaoCao_Load(object sender, EventArgs e)
 {
-    if (_dtKetQua == null || _dtKetQua.Rows.Count == 0)
-    {
-        MessageHelper.Warning("Không có dữ liệu để xuất báo cáo!");
-        return;
-    }
+    // Tự thêm cột STT (1..N) nếu cần dùng trong RDLC
+    DataTable dtReport = ReportHelper.PrepareReportTable(_dtKetQua);
 
-    ReportHelper.ShowReport(
-        dataTable: _dtKetQua,
-        reportTitle: "BÁO CÁO DANH SÁCH BÁC SĨ",
-        filterCondition: $"Chuyên khoa: {cboChuyenKhoa.Text}; Giới tính: {cboGioiTinh.Text}",
-        groupByColumn: "TenCK",
-        groupPrefix: "🏥 Chuyên khoa: ",
-        columns: new[] {
-            new ReportColumn("MaBS", "Mã BS", HorizontalAlignment.Center),
-            new ReportColumn("HoTen", "Họ và tên"),
-            new ReportColumn("GioiTinhHienThi", "Giới tính", HorizontalAlignment.Center),
-            new ReportColumn("NgaySinh", "Ngày sinh", "dd/MM/yyyy", HorizontalAlignment.Center),
-            new ReportColumn("NgayVaoLam", "Ngày vào làm", "dd/MM/yyyy", HorizontalAlignment.Center),
-            new ReportColumn("DonGiaKham", "Đơn giá khám", "N0", HorizontalAlignment.Right, isSum: true) // isSum = tính tổng
-        }
-    );
+    var parameters = new Dictionary<string, string>
+    {
+        { "pDieuKienLoc", _dieuKienLoc },
+        { "pNgayLap", DateTime.Now.ToString("dd/MM/yyyy") }
+    };
+
+    ReportHelper.BindRdlc(reportViewer1, "dsNhanVien", dtReport, parameters);
+}
+
+private void btnXuatPDF_Click(object sender, EventArgs e)
+{
+    ReportHelper.ExportRdlc(reportViewer1, "PDF", "BangLuongNhanVien");
+}
+
+private void btnXuatExcel_Click(object sender, EventArgs e)
+{
+    ReportHelper.ExportRdlc(reportViewer1, "EXCELOPENXML", "BangLuongNhanVien");
+}
+```
+
+### 10.4 Cách 4: Hỗ trợ Crystal Report (`CrystalReportViewer` & `ExportToDisk`)
+Khi đề thi dùng Crystal Report (`ReportDocument` / `CrystalReportViewer`):
+
+```csharp
+private rptBangLuong _rpt = new rptBangLuong();
+
+private void frmBaoCao_Load(object sender, EventArgs e)
+{
+    var parms = new Dictionary<string, object> { { "pDieuKienLoc", _dieuKienLoc } };
+    ReportHelper.BindCrystalReport(crystalReportViewer1, _rpt, _dtKetQua, parms);
+}
+
+private void btnXuatPDF_Click(object sender, EventArgs e)
+{
+    ReportHelper.ExportCrystalReport(_rpt, "PDF", "BangLuongNhanVien");
 }
 ```
 
@@ -539,3 +575,14 @@ private void btnXuatBaoCao_Click(object sender, EventArgs e)
 5. **Lỗi chưa chọn dòng mà bấm Sửa/Xóa:**
    - *Hiện tượng:* Chương trình văng lỗi `NullReferenceException`.
    - *Cách sửa:* Luôn đặt dòng `if (!GridHelper.HasSelection(dgv)) return;` ở đầu sự kiện Sửa và Xóa.
+
+---
+
+## 12. Tài liệu chi tiết từng phần & Làm nhanh bài thi
+- [01_DATABASE_CRUD.md](01_DATABASE_CRUD.md) — `DbHelper`, `CrudHelper`, `FilterBuilder`
+- [02_BINDING_MAPPING.md](02_BINDING_MAPPING.md) — `ComboBoxHelper`, `GridHelper`, `FormMapper`
+- [03_VALIDATION.md](03_VALIDATION.md) — `Validator`, `ValidationResult`, `FromSchema`
+- [04_UTILITIES.md](04_UTILITIES.md) — `DataHelper`, `MessageHelper`, `FormHelper`, `ReportHelper`, `FormGenericManager`
+- [05_EXAM_QUICKSTART.md](05_EXAM_QUICKSTART.md) — **Hỗ trợ làm nhanh bài thi theo cấu trúc đề (Form 1 / Form 2 / Báo cáo / Checklist)**
+- [EXAM_CHEATSHEET.md](EXAM_CHEATSHEET.md) — Tờ phao tra cứu nhanh
+- [COMMON_ERRORS.md](COMMON_ERRORS.md) — Các lỗi phòng thi thường gặp & cách sửa
